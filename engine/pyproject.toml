@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling==1.32.4"]
+build-backend = "hatchling.build"
+
+[project]
+name = "gravity-engine"
+version = "0.1.0"
+description = "引力科研工作台的独立科学计算内核"
+requires-python = ">=3.13"
+license = "GPL-3.0-or-later"
+dependencies = ["numpy==2.5.3", "scipy==1.18.1", "sympy==1.14.0"]
+
+[project.optional-dependencies]
+test = ["pytest==9.1.1", "pytest-cov==7.1.0", "ruff==0.16.10"]
+
+[project.scripts]
+gravity-engine = "gravity_engine.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gravity_engine"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra --strict-markers"
+
+[tool.coverage.run]
+branch = true
+source = ["gravity_engine"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 80
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

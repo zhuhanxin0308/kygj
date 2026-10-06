@@ -2,6 +2,7 @@
 node_modules/
 dist/
 coverage/
+coverage.json
 target/
 .venv/
 __pycache__/
@@ -20,4 +21,3 @@ htmlcov/
 *.sqlite-shm
 *.sqlite-wal
 *.log
-
