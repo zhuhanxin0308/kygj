@@ -64,3 +64,50 @@ fn unconfirmed_probe_exit_is_retained_after_probe_caller_returns() {
     assert_eq!(workbench.shutdown().unwrap_err().code, "process_state_unknown");
     assert_eq!(workbench.shutdown().unwrap_err().code, "process_state_unknown");
 }
+
+#[test]
+fn concurrent_shutdown_cannot_skip_worker_owned_by_first_closer() {
+    use std::{sync::mpsc, time::Duration};
+    const TEST_DEADLINE: Duration = Duration::from_secs(2);
+    const PREMATURE_CLOSE_WINDOW: Duration = Duration::from_millis(100);
+    const TEST_POLL_INTERVAL: Duration = Duration::from_millis(1);
+    let (_directory, workbench, store, key) = managed_run_fixture();
+    let (confirm_exit, await_exit) = mpsc::channel();
+    let inner = Arc::clone(&workbench.inner);
+    let worker_store = store.clone();
+    let worker_key = key.clone();
+    // 用明确的领域信号延迟退出确认；这不是操作系统故障或生产引擎替身。
+    let worker = thread::spawn(move || {
+        await_exit.recv().unwrap();
+        finish_execution(&inner, &worker_store, &worker_key,
+            Err(CoreError::new("cancelled", "注入已确认的受管进程退出"))).unwrap();
+        inner.controls.lock().unwrap().remove(&worker_key);
+    });
+    workbench.inner.controls.lock().unwrap().insert(key.clone(), Arc::new(AtomicBool::new(false)));
+    workbench.inner.workers.lock().unwrap().push((key.clone(), worker));
+    let first_closer = workbench.clone();
+    let first = thread::spawn(move || first_closer.shutdown());
+    let deadline = Instant::now() + TEST_DEADLINE;
+    while !workbench.inner.workers.lock().unwrap().is_empty() {
+        assert!(Instant::now() < deadline, "第一个关闭请求必须接管监督线程并等待");
+        thread::sleep(TEST_POLL_INTERVAL);
+    }
+    assert_eq!(store.run(&key.1).unwrap().state, RunState::Cancelling);
+    let (second_ready, await_second) = mpsc::channel();
+    let (second_result, await_result) = mpsc::channel();
+    let second_closer = workbench.clone();
+    let second = thread::spawn(move || {
+        second_ready.send(()).unwrap();
+        second_result.send(second_closer.shutdown()).unwrap();
+    });
+    await_second.recv_timeout(TEST_DEADLINE).unwrap();
+    let premature = await_result.recv_timeout(PREMATURE_CLOSE_WINDOW);
+    // 无论断言是否成立都先释放并回收线程，避免失败用例遗留后台工作。
+    confirm_exit.send(()).unwrap();
+    assert!(first.join().unwrap().is_ok());
+    second.join().unwrap();
+    assert!(matches!(premature, Err(mpsc::RecvTimeoutError::Timeout)),
+        "第一个关闭仍等待退出确认时，第二个关闭不得提前完成：{premature:?}");
+    assert!(await_result.recv_timeout(TEST_DEADLINE).unwrap().is_ok());
+    assert_eq!(store.run(&key.1).unwrap().state, RunState::Cancelled);
+}
