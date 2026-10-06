@@ -14,6 +14,7 @@ struct Inner {
     probes: Mutex<HashMap<String, Arc<AtomicBool>>>,
     unconfirmed_exits: Mutex<HashSet<Key>>,
     operation: Mutex<()>,
+    shutdown_gate: Mutex<()>,
     stopping: AtomicBool,
     limits: ProcessLimits,
 }
@@ -37,7 +38,7 @@ impl Workbench {
             return Err(CoreError::new("invalid_process_limits", "宿主进程限制无效，墙钟时间至少为一秒"));
         }
         Ok(Self { inner: Arc::new(Inner { projects: Mutex::new(HashMap::new()), preflights: Mutex::new(HashMap::new()),
-            controls: Mutex::new(HashMap::new()), workers: Mutex::new(Vec::new()), probes: Mutex::new(HashMap::new()), unconfirmed_exits: Mutex::new(HashSet::new()), operation: Mutex::new(()),
+            controls: Mutex::new(HashMap::new()), workers: Mutex::new(Vec::new()), probes: Mutex::new(HashMap::new()), unconfirmed_exits: Mutex::new(HashSet::new()), operation: Mutex::new(()), shutdown_gate: Mutex::new(()),
             stopping: AtomicBool::new(false), limits }) })
     }
 
@@ -187,6 +188,8 @@ impl Workbench {
 
     /// 退出时先持久化取消意图，再等待所有监督线程确认真实子进程结束。
     pub fn shutdown(&self) -> CoreResult<()> {
+        // 同时关闭必须串行确认，不能把另一调用临时接管的线程误认为已经退出。
+        let _shutdown = lock(&self.inner.shutdown_gate)?;
         {
             let _operation = lock(&self.inner.operation)?;
             self.inner.stopping.store(true, Ordering::SeqCst);
