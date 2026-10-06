@@ -23,3 +23,13 @@ tempfile = "=3.27.0"
 lto = "thin"
 codegen-units = 1
 strip = "debuginfo"
+
+# 保留项目代码的行级诊断，同时控制大型Windows绑定的编译内存。
+[profile.dev]
+debug = 1
+
+[profile.dev.package.windows]
+debug = 0
+
+[profile.test.package.windows]
+debug = 0
