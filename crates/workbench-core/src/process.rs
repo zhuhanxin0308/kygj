@@ -24,13 +24,17 @@ pub fn canonical_python(path: &Path) -> CoreResult<PathBuf> {
 }
 
 pub fn probe_environment(python: &Path, limits: &ProcessLimits) -> CoreResult<EnvironmentInfo> {
+    probe_environment_controlled(python, limits, Arc::new(AtomicBool::new(false)))
+}
+
+pub(crate) fn probe_environment_controlled(python: &Path, limits: &ProcessLimits, cancelled: Arc<AtomicBool>) -> CoreResult<EnvironmentInfo> {
     let executable = canonical_python(python)?;
     let request_id = Uuid::new_v4().to_string();
     let request = serde_json::to_vec(&serde_json::json!({"protocolVersion":PROTOCOL_VERSION,"requestId":request_id,"action":"describe"}))
         .map_err(|_| CoreError::new("invalid_request", "无法构建环境探测请求"))?;
     let probe_limits = ProcessLimits { max_wall_time: limits.max_wall_time.min(DESCRIBE_TIMEOUT), ..limits.clone() };
     let directory = executable.parent().ok_or_else(|| CoreError::new("invalid_python", "Python目录无效"))?;
-    let output = exchange(&executable, FIXED_ENGINE_ARGUMENTS, directory, request, &probe_limits, Arc::new(AtomicBool::new(false)))?;
+    let output = exchange(&executable, FIXED_ENGINE_ARGUMENTS, directory, request, &probe_limits, cancelled)?;
     let info = protocol::decode_capabilities(&output.stdout, &request_id, &executable.to_string_lossy())?;
     if !output.status.success() { return Err(CoreError::new("process_exit_error", "环境探测进程异常退出，未登记为就绪")); }
     Ok(info)
@@ -51,7 +55,7 @@ pub fn execute_engine(directory: &Path, request: &TraceRequest, environment: &En
 /// 原始进程交换仅为内部实现与测试使用，桌面IPC不会暴露参数数组或任意程序入口。
 fn exchange(executable: &Path, args: &[&str], directory: &Path, input: Vec<u8>, limits: &ProcessLimits, cancelled: Arc<AtomicBool>) -> CoreResult<ProcessOutput> {
     if input.len().saturating_add(1) > MAX_REQUEST_BYTES { return Err(CoreError::new("input_limit_exceeded", "请求超过1 MiB协议上限")); }
-    if limits.max_wall_time.is_zero() || limits.poll_interval.is_zero() || limits.max_output_bytes == 0
+    if limits.max_wall_time.is_zero() || limits.poll_interval.is_zero() || limits.termination_timeout.is_zero() || limits.max_output_bytes == 0
         || limits.max_output_bytes > MAX_RESPONSE_BYTES || limits.max_stderr_bytes > MAX_STDERR_BYTES {
         return Err(CoreError::new("invalid_process_limits", "进程资源限制无效"));
     }
@@ -83,9 +87,8 @@ fn exchange(executable: &Path, args: &[&str], directory: &Path, input: Vec<u8>, 
             else if started.elapsed() >= limits.max_wall_time { Some(CoreError::new("process_timeout", "计算超过已声明的墙钟时间限制")) }
             else { None };
         if let Some(reason) = reason {
-            // kill可能与自然退出竞争；无论如何都要wait确认，不能提前返回cancelled。
-            let _ = child.kill();
-            let exited = child.wait().map_err(|_| CoreError::new("process_state_unknown", "无法确认计算进程已经退出"))?;
+            // 终止请求可能失败，使用有预算的内核状态轮询确认，不进入无界wait。
+            let exited = terminate_and_confirm(&mut child, limits)?;
             failure = Some(reason);
             break exited;
         }
@@ -93,9 +96,9 @@ fn exchange(executable: &Path, args: &[&str], directory: &Path, input: Vec<u8>, 
             Ok(Some(status)) => break status,
             Ok(None) => thread::sleep(limits.poll_interval),
             Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(CoreError::new("process_state_unknown", "无法可靠读取计算进程状态"));
+                let exited = terminate_and_confirm(&mut child, limits)?;
+                failure = Some(CoreError::new("process_state_read_failed", "状态查询失败，但已确认计算进程退出"));
+                break exited;
             }
         }
     };
@@ -106,6 +109,21 @@ fn exchange(executable: &Path, args: &[&str], directory: &Path, input: Vec<u8>, 
     if out.truncated { return Err(CoreError::new("output_limit_exceeded", "标准输出超过已声明的协议上限")); }
     if !writer_rx.recv_timeout(STREAM_DRAIN_TIMEOUT).unwrap_or(false) { return Err(CoreError::new("process_input_failed", "未能完整发送冻结请求")); }
     Ok(ProcessOutput { stdout: out.bytes, stderr: err.bytes, stderr_truncated: err.truncated, status })
+}
+
+fn terminate_and_confirm(child: &mut std::process::Child, limits: &ProcessLimits) -> CoreResult<ExitStatus> {
+    // 不猜测PID，也不因kill返回错误就直接断言进程仍在运行或已经停止。
+    let _ = child.kill();
+    poll_confirmed_exit(|| child.try_wait(), limits.termination_timeout, limits.poll_interval)
+}
+
+fn poll_confirmed_exit(mut poll: impl FnMut() -> std::io::Result<Option<ExitStatus>>, budget: Duration, interval: Duration) -> CoreResult<ExitStatus> {
+    let start = Instant::now();
+    loop {
+        if let Ok(Some(status)) = poll() { return Ok(status); }
+        if start.elapsed() >= budget { return Err(CoreError::new("process_state_unknown", "在终止等待预算内未能确认进程退出，需保留待核实状态")); }
+        thread::sleep(interval.min(budget.saturating_sub(start.elapsed())));
+    }
 }
 
 struct Capture { bytes: Vec<u8>, truncated: bool }

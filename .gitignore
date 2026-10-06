@@ -4,6 +4,8 @@ dist/
 coverage/
 coverage.json
 target/
+# Tauri依据锁定版本和能力清单重新生成，禁止手工修改其框架Schema。
+src-tauri/gen/schemas/
 .venv/
 __pycache__/
 *.py[cod]

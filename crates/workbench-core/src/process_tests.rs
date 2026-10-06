@@ -62,6 +62,35 @@ fn installed_engine_describes_real_environment() {
     assert!(!info.python_version.is_empty()); assert!(!info.scipy_version.is_empty());
 }
 
+#[test]
+fn transient_state_read_failure_can_still_confirm_exit() {
+    // 只注入内核查询结果，验证一次查询错误不等于永久无法确认退出。
+    #[cfg(windows)] use std::os::windows::process::ExitStatusExt;
+    #[cfg(unix)] use std::os::unix::process::ExitStatusExt;
+    let mut queries = 0;
+    let status = poll_confirmed_exit(|| {
+        queries += 1;
+        if queries == 1 { Err(std::io::Error::other("注入状态查询异常")) }
+        else { Ok(Some(ExitStatus::from_raw(0))) }
+    }, Duration::from_millis(100), Duration::from_millis(1)).unwrap();
+    assert!(status.success());
+    assert_eq!(queries, 2);
+}
+
+#[test]
+fn termination_confirmation_has_a_budget_for_live_or_unreadable_processes() {
+    // 领域故障注入，不声称在实际操作系统上制造了kill或wait故障。
+    for unreadable in [false, true] {
+        let started = Instant::now();
+        let error = poll_confirmed_exit(|| {
+            if unreadable { Err(std::io::Error::other("注入持续状态查询异常")) }
+            else { Ok(None) }
+        }, Duration::from_millis(20), Duration::from_millis(1)).unwrap_err();
+        assert_eq!(error.code, "process_state_unknown");
+        assert!(started.elapsed() < Duration::from_secs(1), "不能退回无界wait");
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn virtual_environment_symbolic_entry_is_not_resolved_to_base_python() {

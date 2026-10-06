@@ -7,7 +7,8 @@ rust-version.workspace = true
 
 [lib]
 name = "gravity_workbench_desktop"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# 六个桌面目标均由Rust二进制链接，不生成移动端使用的额外原生库产物。
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "=2.7.1", features = [] }
@@ -18,3 +19,7 @@ tauri-plugin-dialog = "=2.8.1"
 serde.workspace = true
 serde_json.workspace = true
 workbench-core = { path = "../crates/workbench-core" }
+
+[dev-dependencies]
+tauri = { version = "=2.12.1", features = ["test"] }
+tempfile.workspace = true

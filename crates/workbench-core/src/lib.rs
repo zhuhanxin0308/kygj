@@ -8,5 +8,7 @@ mod schema;
 pub mod storage;
 pub mod types;
 pub mod validation;
+mod workbench;
 
 pub use error::{CoreError, CoreResult};
+pub use workbench::Workbench;

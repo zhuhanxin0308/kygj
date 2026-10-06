@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-local-workbench",
+  "description": "主窗口仅使用本地文件选择，不开放Shell、文件系统插件或远程页面能力。",
+  "windows": ["main"],
+  "permissions": ["core:default", "dialog:allow-open"]
+}

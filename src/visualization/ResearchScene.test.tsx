@@ -7,6 +7,8 @@ import { model, result } from '../test/fixtures';
 
 // 使用真实 Three.js 几何与相机，只替换 WebGL 挂载边界以便无 GPU 测试。
 const hooks = vi.hoisted(() => ({ camera: null as unknown, invalidate: vi.fn(), fail: false }));
+// 多步骤 jsdom 交互包含完整 Ant Design 可访问性查询；该时限不是科学或性能验收门槛。
+const INTERACTION_TEST_TIMEOUT_MS = 20000;
 vi.mock('@react-three/fiber', () => ({
   Canvas: ({ children, orthographic }: { children: ReactNode; orthographic: boolean }) => {
     if (hooks.fail) throw new Error('GPU unavailable');
@@ -40,7 +42,7 @@ describe('三维场景与可访问操作', () => {
     expect((hooks.camera as PerspectiveCamera).zoom).toBeCloseTo(600 / (2 * Math.hypot(1, 0.1) * 1.4));
     fireEvent.click(screen.getByRole('button', { name: '复位视角' }));
     expect(screen.getByText(/显示真实运行轨迹/)).toBeInTheDocument();
-  });
+  }, INTERACTION_TEST_TIMEOUT_MS);
   it('无结果只显示公式几何，无效参数暂停预览', () => {
     hooks.camera = new PerspectiveCamera();
     const props = { config: model.config, result: null, selected: 0, affine: 0, onSelect: vi.fn() };

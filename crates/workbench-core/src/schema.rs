@@ -53,3 +53,7 @@ pub fn verify(connection: &Connection) -> CoreResult<()> {
 }
 
 pub fn database_error() -> CoreError { CoreError::new("storage_error", "项目存储操作失败，原有事务未被部分提交") }
+
+#[cfg(test)]
+#[path = "schema_tests.rs"]
+mod tests;

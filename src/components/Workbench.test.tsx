@@ -18,6 +18,8 @@ const makeClient = () => ({
   exportRun: vi.fn().mockResolvedValue({ path: 'C:/Export/run.json', sha256: 'c'.repeat(64) }),
 }) satisfies DesktopClient;
 const dialogs: FileDialogs = { directory: async () => 'C:/Research', python: async () => environment.pythonExecutable };
+// 工作区包含完整主题和模态层，使用独立的交互测试时限，不改变产品或科学预算。
+const WORKBENCH_TEST_TIMEOUT_MS = 20000;
 describe('工作区失败与可访问行为', () => {
   it('无宿主时明确说明不可运行，没有虚构轨迹或进度', () => {
     render(<Workbench />);
@@ -25,13 +27,13 @@ describe('工作区失败与可访问行为', () => {
     expect(screen.getByRole('button', { name: '创建项目' })).toBeDisabled();
     expect(screen.getByText('尚无运行结果')).toBeInTheDocument();
     expect(screen.queryByText('100%')).not.toBeInTheDocument();
-  });
+  }, WORKBENCH_TEST_TIMEOUT_MS);
   it('命令搜索可用键盘打开，未实现能力不可触发', () => {
     render(<Workbench />);
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
     expect(screen.getByRole('dialog', { name: '命令搜索' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '工作流（尚未接入）' })).toBeDisabled();
-  });
+  }, WORKBENCH_TEST_TIMEOUT_MS);
   it('真实项目结果、来源、原始样本与草稿几何保持独立', async () => {
     const client = makeClient();
     render(<Workbench client={client} dialogs={dialogs} />);

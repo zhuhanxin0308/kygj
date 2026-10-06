@@ -12,6 +12,8 @@ pub const MIN_SAMPLES: usize = 2;
 pub const MIN_RELATIVE_TOLERANCE: f64 = 100.0 * f64::EPSILON;
 pub const DEFAULT_WALL_TIME_SECONDS: u64 = 300;
 pub const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
+pub const PROCESS_TERMINATION_TIMEOUT: Duration = Duration::from_secs(3);
+pub const SHUTDOWN_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(10);
 pub const DESCRIBE_TIMEOUT: Duration = Duration::from_secs(15);
 pub const STREAM_CHUNK_BYTES: usize = 8192;
 pub const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -23,10 +25,11 @@ pub struct ProcessLimits {
     pub max_output_bytes: usize,
     pub max_stderr_bytes: usize,
     pub poll_interval: Duration,
+    pub termination_timeout: Duration,
 }
 
 impl Default for ProcessLimits {
     fn default() -> Self {
-        Self { max_wall_time: Duration::from_secs(DEFAULT_WALL_TIME_SECONDS), max_output_bytes: MAX_RESPONSE_BYTES, max_stderr_bytes: MAX_STDERR_BYTES, poll_interval: PROCESS_POLL_INTERVAL }
+        Self { max_wall_time: Duration::from_secs(DEFAULT_WALL_TIME_SECONDS), max_output_bytes: MAX_RESPONSE_BYTES, max_stderr_bytes: MAX_STDERR_BYTES, poll_interval: PROCESS_POLL_INTERVAL, termination_timeout: PROCESS_TERMINATION_TIMEOUT }
     }
 }
