@@ -16,6 +16,10 @@ const makeClient = () => ({
   startRun: vi.fn().mockResolvedValue({ ...run, state: 'running', result: null }), getRun: vi.fn().mockResolvedValue(run),
   cancelRun: vi.fn().mockResolvedValue({ ...run, state: 'cancelling', result: null }),
   exportRun: vi.fn().mockResolvedValue({ path: 'C:/Export/run.json', sha256: 'c'.repeat(64) }),
+  listVerificationRules: vi.fn().mockResolvedValue({ rules: [], total: 0, nextOffset: null }),
+  listVerificationRecords: vi.fn().mockResolvedValue({ records: [], total: 0, nextOffset: null }),
+  getRunVerificationState: vi.fn(), executeVerification: vi.fn(), saveVerificationRuleVersion: vi.fn(), getVerificationRecord: vi.fn(),
+  prepareProjectMigration: vi.fn(), applyProjectMigration: vi.fn(),
 }) satisfies DesktopClient;
 const dialogs: FileDialogs = { directory: async () => 'C:/Research', python: async () => environment.pythonExecutable };
 // 工作区包含完整主题和模态层，使用独立的交互测试时限，不改变产品或科学预算。

@@ -39,6 +39,7 @@ pub fn initialize(connection: &mut Connection, project: &ProjectSummary) -> Core
     ).map_err(|_| database_error())?;
     let record = serde_json::to_string(project).map_err(|_| database_error())?;
     transaction.execute("INSERT INTO projects(id,record_json) VALUES (?1,?2)", (&project.id, &record)).map_err(|_| database_error())?;
+    crate::verification_storage::initialize(&transaction,&project.id)?;
     transaction.execute_batch(&format!("PRAGMA application_id={DATABASE_APPLICATION_ID}; PRAGMA user_version={SCHEMA_VERSION};")).map_err(|_| database_error())?;
     transaction.commit().map_err(|_| database_error())
 }
@@ -46,6 +47,9 @@ pub fn initialize(connection: &mut Connection, project: &ProjectSummary) -> Core
 pub fn verify(connection: &Connection) -> CoreResult<()> {
     let app: i32 = connection.pragma_query_value(None, "application_id", |row| row.get(0)).map_err(|_| database_error())?;
     let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0)).map_err(|_| database_error())?;
+    if app == DATABASE_APPLICATION_ID && version == 1 {
+        return Err(CoreError::new("migration_required", "项目使用v1格式，请先预览并确认有一致性备份的v2迁移计划"));
+    }
     if app != DATABASE_APPLICATION_ID || version != SCHEMA_VERSION {
         return Err(CoreError::new("unsupported_project", "目录不是受支持的工作台项目，或项目格式版本不兼容"));
     }

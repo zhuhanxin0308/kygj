@@ -223,3 +223,6 @@ pub struct TrajectoryValidation { pub status: ValidationStatus, pub checks: Vec<
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ValidationCheck { pub name: String, pub actual: f64, pub threshold: f64, pub passed: bool }
+
+// 独立验证与迁移类型复用现有IPC导出入口，不改变科学协议v1。
+pub use crate::verification_types::*;

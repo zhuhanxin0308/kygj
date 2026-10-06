@@ -9,7 +9,7 @@ use workbench_core::{Workbench, types::*};
 const INTEGRATION_TIMEOUT: Duration = Duration::from_secs(60);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
-fn invoke(window: &WebviewWindow<MockRuntime>, command: &str, request: Value) -> Result<Value, Value> {
+pub(super) fn invoke(window: &WebviewWindow<MockRuntime>, command: &str, request: Value) -> Result<Value, Value> {
     get_ipc_response(window, InvokeRequest {
         cmd: command.into(), callback: CallbackFn(0), error: CallbackFn(1),
         url: (if cfg!(windows) { "http://tauri.localhost" } else { "tauri://localhost" }).parse().unwrap(),
@@ -18,7 +18,7 @@ fn invoke(window: &WebviewWindow<MockRuntime>, command: &str, request: Value) ->
     }).map(|body| body.deserialize::<Value>().unwrap())
 }
 
-fn call<T: DeserializeOwned>(window: &WebviewWindow<MockRuntime>, command: &str, request: Value) -> T {
+pub(super) fn call<T: DeserializeOwned>(window: &WebviewWindow<MockRuntime>, command: &str, request: Value) -> T {
     let response = invoke(window, command, request).unwrap_or_else(|error| panic!("{command}未通过：{error}"));
     serde_json::from_value(response).unwrap()
 }
@@ -61,6 +61,7 @@ fn registered_ipc_executes_and_exports_a_real_scientific_run() {
     assert_eq!(completed.state, RunState::Completed, "{:?}", completed.error);
     assert_eq!(completed.validation_status, ValidationStatus::Passed);
     assert_eq!(completed.result.as_ref().unwrap().trajectories[2].termination, "returned");
+    super::verification_tests::assert_real_verification_history(&window, &identity, &completed);
     // 终态后的取消不得改写科研结果。
     let cancelled: RunRecord = call(&window, "cancel_run", json!({ "projectId": identity, "runId": completed.id }));
     assert_eq!(cancelled, completed);

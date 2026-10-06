@@ -1,0 +1,153 @@
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { useVerification } from './useVerification';
+import { createDesktopClient } from '../services/desktop';
+import { verificationRecord, verificationRule, verificationState } from '../test/verificationFixtures';
+import type { VerificationRulePage } from '../domain/verification';
+
+// 只替换 IPC 边界，验证项目切换、追加历史和异步请求的真实编排。
+afterEach(cleanup);
+const setup = () => {
+  const client = createDesktopClient(vi.fn(), () => true);
+  client.listVerificationRules = vi.fn().mockResolvedValue({ rules: [verificationRule], total: 1, nextOffset: null });
+  client.listVerificationRecords = vi.fn().mockResolvedValue({ records: [], total: 0, nextOffset: null });
+  client.getRunVerificationState = vi.fn().mockResolvedValue(verificationState);
+  client.executeVerification = vi.fn().mockResolvedValue(verificationRecord);
+  client.saveVerificationRuleVersion = vi.fn().mockResolvedValue({ ...verificationRule, id: 'rule-2', parentVersionId: verificationRule.id, builtin: false });
+  client.getVerificationRecord = vi.fn().mockResolvedValue(verificationRecord);
+  return client;
+};
+describe('独立验证操作与异步隔离', () => {
+  it('未执行保持未执行，显式检查后保存独立结果并读取历史', async () => {
+    const client = setup();
+    const { result } = renderHook(() => useVerification(client, verificationRule.projectId, verificationRecord.runId));
+    await waitFor(() => expect(result.current.state?.conclusion).toBe('not_run'));
+    expect(client.executeVerification).not.toHaveBeenCalled();
+    vi.mocked(client.getRunVerificationState).mockResolvedValue({ ...verificationState, conclusion: 'passed', latestRecord: verificationRecord, recordCount: 1 });
+    vi.mocked(client.listVerificationRecords).mockResolvedValue({ records: [verificationRecord], total: 1, nextOffset: null });
+    await act(() => result.current.execute());
+    expect(client.executeVerification).toHaveBeenCalledWith(verificationRule.projectId, expect.objectContaining({ runId: verificationRecord.runId, ruleVersionId: verificationRule.id, previousRecordId: null }));
+    expect(result.current.records).toEqual([verificationRecord]);
+    await act(() => result.current.execute());
+    expect(client.executeVerification).toHaveBeenLastCalledWith(verificationRule.projectId, expect.objectContaining({ previousRecordId: verificationRecord.id }));
+  });
+  it('项目切换丢弃迟到规则响应和旧错误', async () => {
+    const client = setup(); let resolve!: (value: VerificationRulePage) => void;
+    vi.mocked(client.listVerificationRules).mockImplementationOnce(() => new Promise((finish) => { resolve = finish; }));
+    const { result, rerender } = renderHook(({ projectId }) => useVerification(client, projectId, verificationRecord.runId), { initialProps: { projectId: verificationRule.projectId } });
+    vi.mocked(client.listVerificationRules).mockResolvedValue({ rules: [], total: 0, nextOffset: null });
+    rerender({ projectId: 'project-2' });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await act(async () => resolve({ rules: [verificationRule], total: 1, nextOffset: null }));
+    expect(result.current.rules).toEqual([]);
+    expect(result.current.state).toBeNull();
+  });
+  it('修改阈值产生新版本，并要求完整保留全部指标', async () => {
+    const client = setup();
+    const { result } = renderHook(() => useVerification(client, verificationRule.projectId, verificationRecord.runId));
+    await waitFor(() => expect(result.current.selectedRule).not.toBeNull());
+    const draft = { baseVersionId: verificationRule.id, title: '新规则', changeReason: '研究方案更新', thresholds: verificationRule.checks.map(({ metricId, threshold, basis }) => ({ metricId, threshold, basis })) };
+    await act(() => result.current.saveRule({ ...draft, thresholds: [] }));
+    expect(client.saveVerificationRuleVersion).not.toHaveBeenCalled();
+    await act(() => result.current.saveRule(draft));
+    expect(result.current.rules.map((rule) => rule.id)).toEqual(['rule-1', 'rule-2']);
+    expect(result.current.selectedRule?.id).toBe('rule-2');
+  });
+  it('执行失败保留历史并公开错误，不自动重试', async () => {
+    const client = setup();
+    vi.mocked(client.listVerificationRecords).mockResolvedValue({ records: [verificationRecord], total: 1, nextOffset: null });
+    vi.mocked(client.executeVerification).mockRejectedValue({ code: 'failure', message: '检查进程中断' });
+    const { result } = renderHook(() => useVerification(client, verificationRule.projectId, verificationRecord.runId));
+    await waitFor(() => expect(result.current.state).not.toBeNull());
+    await act(() => result.current.execute());
+    expect(result.current.error).toBe('检查进程中断');
+    expect(result.current.records).toEqual([verificationRecord]);
+    expect(client.executeVerification).toHaveBeenCalledTimes(1);
+  });
+  it('规则与历史分页追加且去重，读取历史详情仍核对运行身份', async () => {
+    const client = setup();
+    vi.mocked(client.listVerificationRules).mockResolvedValueOnce({ rules: [verificationRule], total: 2, nextOffset: 1 });
+    vi.mocked(client.listVerificationRecords).mockResolvedValueOnce({ records: [verificationRecord], total: 2, nextOffset: 1 });
+    const { result } = renderHook(() => useVerification(client, verificationRule.projectId, verificationRecord.runId));
+    await waitFor(() => expect(result.current.state).not.toBeNull());
+    vi.mocked(client.listVerificationRules).mockResolvedValue({ rules: [{ ...verificationRule, id: 'rule-2' }], total: 2, nextOffset: null });
+    vi.mocked(client.listVerificationRecords).mockResolvedValue({ records: [{ ...verificationRecord, id: 'record-2' }], total: 2, nextOffset: null });
+    await act(() => result.current.loadMoreRules());
+    await act(() => result.current.loadMoreRecords());
+    expect(result.current.rules).toHaveLength(2); expect(result.current.records).toHaveLength(2);
+    expect(client.listVerificationRecords).toHaveBeenLastCalledWith(verificationRule.projectId, verificationRecord.runId, 1, 20);
+    await act(() => result.current.inspectRecord(verificationRecord.id));
+    expect(result.current.detail).toEqual(verificationRecord);
+    act(() => result.current.closeDetail()); expect(result.current.detail).toBeNull();
+    vi.mocked(client.getVerificationRecord).mockResolvedValue({ ...verificationRecord, runId: 'other' });
+    await act(() => result.current.inspectRecord(verificationRecord.id));
+    expect(result.current.detail).toBeNull(); expect(result.current.error).toContain('当前运行');
+    act(() => result.current.selectRule('unknown'));
+    expect(result.current.selectedRule?.id).toBe(verificationRule.id);
+    act(() => result.current.selectRule('rule-2'));
+    await waitFor(() => expect(client.getRunVerificationState).toHaveBeenLastCalledWith(verificationRule.projectId, verificationRecord.runId, 'rule-2'));
+    await act(() => result.current.refresh());
+    expect(result.current.records.map((record) => record.id)).toEqual(['record-2']);
+  });
+  it('切换项目时丢弃正在执行的旧验证，重复点击不重复提交', async () => {
+    const client = setup(); let resolve!: (value: typeof verificationRecord) => void;
+    vi.mocked(client.executeVerification).mockImplementation(() => new Promise((finish) => { resolve = finish; }));
+    const { result, rerender } = renderHook(({ projectId }) => useVerification(client, projectId, verificationRecord.runId), { initialProps: { projectId: verificationRule.projectId } });
+    await waitFor(() => expect(result.current.state).not.toBeNull());
+    let pending!: Promise<boolean>;
+    act(() => { pending = result.current.execute(); });
+    await act(() => result.current.execute());
+    expect(client.executeVerification).toHaveBeenCalledTimes(1);
+    vi.mocked(client.listVerificationRules).mockResolvedValue({ rules: [], total: 0, nextOffset: null });
+    rerender({ projectId: 'project-2' });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await act(async () => { resolve(verificationRecord); await pending; });
+    expect(result.current.detail).toBeNull(); expect(result.current.records).toEqual([]); expect(result.current.busy).toBe(false);
+  });
+  it('无项目不查询，无运行可管理规则；待处理请求阻止再次提交', async () => {
+    const client = setup();
+    const { result, rerender } = renderHook(({ projectId, runId }) => useVerification(client, projectId, runId), { initialProps: { projectId: null as string | null, runId: null as string | null } });
+    expect(client.listVerificationRules).not.toHaveBeenCalled();
+    await act(() => result.current.execute()); expect(client.executeVerification).not.toHaveBeenCalled();
+    rerender({ projectId: verificationRule.projectId, runId: null });
+    await waitFor(() => expect(result.current.selectedRule).not.toBeNull());
+    expect(client.listVerificationRecords).not.toHaveBeenCalled();
+    await act(() => result.current.execute()); expect(result.current.error).toContain('等待');
+    vi.mocked(client.getRunVerificationState).mockResolvedValue({ ...verificationState, conclusion: 'inconclusive', pendingRequestId: 'pending' });
+    rerender({ projectId: verificationRule.projectId, runId: verificationRecord.runId });
+    await waitFor(() => expect(result.current.state?.pendingRequestId).toBe('pending'));
+    await act(() => result.current.execute()); expect(client.executeVerification).not.toHaveBeenCalled();
+  });
+  it('规则或状态读取失败向用户显示原因，不留下其他选择的绿色状态', async () => {
+    const client = setup();
+    vi.mocked(client.listVerificationRules).mockRejectedValueOnce({ code: 'corrupt', message: '规则完整性错误' });
+    const { result, rerender } = renderHook(({ projectId }) => useVerification(client, projectId, verificationRecord.runId), { initialProps: { projectId: verificationRule.projectId } });
+    await waitFor(() => expect(result.current.error).toBe('规则完整性错误'));
+    expect(result.current.state).toBeNull();
+    vi.mocked(client.getRunVerificationState).mockRejectedValueOnce({ code: 'corrupt', message: '验证来源错误' });
+    rerender({ projectId: 'project-2' });
+    await waitFor(() => expect(result.current.error).toBe('验证来源错误'));
+    expect(result.current.state).toBeNull();
+  });
+  it('执行回复丢失后重试复用原请求身份，不创建第二个检查', async () => {
+    const client = setup();
+    vi.mocked(client.executeVerification).mockRejectedValueOnce({ code: 'connection_lost', message: '回复丢失' }).mockResolvedValueOnce(verificationRecord);
+    const { result } = renderHook(() => useVerification(client, verificationRule.projectId, verificationRecord.runId));
+    await waitFor(() => expect(result.current.state).not.toBeNull());
+    await act(() => result.current.execute());
+    const original = vi.mocked(client.executeVerification).mock.calls[0][1];
+    expect(result.current.retryRequest?.clientRequestId).toBe(original.clientRequestId);
+    await act(() => result.current.execute());
+    expect(vi.mocked(client.executeVerification).mock.calls[1][1]).toEqual(original);
+    expect(result.current.retryRequest).toBeNull();
+  });
+  it('首次规则读取失败可手动重读，不要求关闭整个项目', async () => {
+    const client = setup();
+    vi.mocked(client.listVerificationRules).mockRejectedValueOnce({ code: 'temporary', message: '暂时无法读取规则' });
+    const { result } = renderHook(() => useVerification(client, verificationRule.projectId, verificationRecord.runId));
+    await waitFor(() => expect(result.current.error).toBe('暂时无法读取规则'));
+    await act(() => result.current.refresh());
+    await waitFor(() => expect(result.current.selectedRule?.id).toBe(verificationRule.id));
+    expect(result.current.error).toBeNull();
+  });
+});

@@ -22,7 +22,7 @@ fn decode<T: DeserializeOwned>(value: &str) -> CoreResult<T> { serde_json::from_
 fn io_error() -> CoreError { CoreError::new("file_access_error", "无法访问已选择的项目目录或写入所需文件") }
 
 /// 拒绝项目内部元数据链接，防止导入目录把数据库写入重定向到无关位置。
-fn reject_link(path: &Path) -> CoreResult<()> {
+pub(crate) fn reject_link(path: &Path) -> CoreResult<()> {
     let metadata = fs::symlink_metadata(path).map_err(|_| io_error())?;
     let mut linked = metadata.file_type().is_symlink();
     #[cfg(windows)] {
@@ -68,7 +68,7 @@ impl ProjectStore {
 
     pub fn directory(&self) -> &Path { &self.directory }
     fn database_path(&self) -> PathBuf { self.directory.join(METADATA_DIRECTORY).join(DATABASE_FILE) }
-    fn connection(&self) -> CoreResult<Connection> {
+    pub(crate) fn connection(&self) -> CoreResult<Connection> {
         reject_link(&self.directory.join(METADATA_DIRECTORY))?;
         reject_link(&self.database_path())?;
         let connection = Connection::open_with_flags(self.database_path(), OpenFlags::SQLITE_OPEN_READ_WRITE).map_err(|_| schema::database_error())?;
@@ -214,6 +214,7 @@ impl ProjectStore {
         validate_run_payload(&run)?;
         let state = encode(&next)?;
         transaction.execute("UPDATE runs SET state=?1,record_json=?2 WHERE id=?3", (state.trim_matches('"'), encode(&run)?, id)).map_err(|_| schema::database_error())?;
+        if next == RunState::Completed { crate::verification_storage::capture_result_identity(&transaction,&run,ResultIdentityOrigin::CapturedAtCompletion)?; }
         transaction.commit().map_err(|_| schema::database_error())?;
         Ok(run)
     }
@@ -270,7 +271,7 @@ fn valid_environment(environment: &EnvironmentInfo) -> bool {
 }
 
 /// 同时验证关系列与JSON内部身份；SQLite外键不能替代这一步。
-fn validate_model_record(connection: &Connection, model: &ModelVersion, project_id: &str) -> CoreResult<()> {
+pub(crate) fn validate_model_record(connection: &Connection, model: &ModelVersion, project_id: &str) -> CoreResult<()> {
     let (stored_project, label, created_at): (String, String, String) = connection.query_row(
         "SELECT project_id,label,created_at FROM models WHERE id=?1", [&model.id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))
     ).map_err(|_| corrupt())?;
@@ -314,7 +315,7 @@ fn validate_run_payload(run: &RunRecord) -> CoreResult<()> {
     Ok(())
 }
 
-fn validate_run_record(connection: &Connection, run: &RunRecord, project_id: &str) -> CoreResult<()> {
+pub(crate) fn validate_run_record(connection: &Connection, run: &RunRecord, project_id: &str) -> CoreResult<()> {
     validate_run_payload(run)?;
     let (stored_project, model_id, created_at, state, request, environment): (String, String, String, String, String, String) = connection.query_row(
         "SELECT project_id,model_id,created_at,state,request_json,environment_json FROM runs WHERE id=?1", [&run.id],
@@ -326,5 +327,7 @@ fn validate_run_record(connection: &Connection, run: &RunRecord, project_id: &st
         || run.created_at != created_at || encode(&run.state)?.trim_matches('"') != state
         || encode(&run.request)? != request || encode(&run.environment)? != environment
         || encode(&run.request.config)? != encode(&model.config)? { return Err(corrupt()); }
+    let version:u32=connection.pragma_query_value(None,"user_version",|row|row.get(0)).map_err(|_|corrupt())?;
+    if version >= 2 { crate::verification_storage::source_identity(connection,run)?; }
     Ok(())
 }

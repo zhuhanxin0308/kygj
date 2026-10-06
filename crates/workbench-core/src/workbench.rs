@@ -17,6 +17,7 @@ struct Inner {
     shutdown_gate: Mutex<()>,
     stopping: AtomicBool,
     limits: ProcessLimits,
+    migrations: Mutex<HashMap<String, ProjectMigrationPlan>>,
 }
 
 /// Clone只共享管理状态，不复制运行或生成第二个执行端。
@@ -39,7 +40,7 @@ impl Workbench {
         }
         Ok(Self { inner: Arc::new(Inner { projects: Mutex::new(HashMap::new()), preflights: Mutex::new(HashMap::new()),
             controls: Mutex::new(HashMap::new()), workers: Mutex::new(Vec::new()), probes: Mutex::new(HashMap::new()), unconfirmed_exits: Mutex::new(HashSet::new()), operation: Mutex::new(()), shutdown_gate: Mutex::new(()),
-            stopping: AtomicBool::new(false), limits }) })
+            stopping: AtomicBool::new(false), limits, migrations:Mutex::new(HashMap::new()) }) })
     }
 
     fn ensure_running(&self) -> CoreResult<()> {
@@ -67,6 +68,7 @@ impl Workbench {
         let state = store.state()?;
         if let Some(existing) = lock(&self.inner.projects)?.get(&state.project.id)
             && existing.directory() != store.directory() { return Err(CoreError::new("project_identity_conflict", "同一项目身份已在其他目录打开，不能混用")); }
+        store.recover_verification_requests()?;
         // 没有当前进程句柄的旧记录只标为未知，绝不自动重启或假装已经失败。
         let controls = lock(&self.inner.controls)?;
         for run in state.runs {
@@ -185,6 +187,25 @@ impl Workbench {
     }
 
     pub fn export_run(&self, project_id: &str, run_id: &str, destination: &Path) -> CoreResult<ExportedRun> { self.project(project_id)?.export_run(run_id, destination) }
+
+    /// 独立验证接口只追加账本，所有对象先经当前已打开项目身份校验。
+    pub fn list_verification_rules(&self, project_id:&str, offset:usize, limit:usize)->CoreResult<VerificationRulePage>{self.project(project_id)?.list_verification_rules(offset,limit)}
+    pub fn save_verification_rule_version(&self, project_id:&str, draft:VerificationRuleDraft)->CoreResult<VerificationRuleVersion>{self.ensure_running()?;self.project(project_id)?.save_verification_rule_version(draft)}
+    pub fn get_run_verification_state(&self, project_id:&str, run_id:&str, rule_version_id:&str)->CoreResult<RunVerificationState>{self.project(project_id)?.get_run_verification_state(run_id,rule_version_id)}
+    pub fn execute_verification(&self, project_id:&str, request:ExecuteVerification)->CoreResult<VerificationRecord>{let _operation=lock(&self.inner.operation)?;self.ensure_running()?;self.project(project_id)?.execute_verification(request)}
+    pub fn list_verification_records(&self, project_id:&str, run_id:&str, offset:usize, limit:usize)->CoreResult<VerificationRecordPage>{self.project(project_id)?.list_verification_records(run_id,offset,limit)}
+    pub fn get_verification_record(&self, project_id:&str, record_id:&str)->CoreResult<VerificationRecord>{self.project(project_id)?.get_verification_record(record_id)}
+
+    /// 预览只读，完整计划由宿主会话保存；前端不能自行构造授权计划。
+    pub fn prepare_project_migration(&self, directory:&Path)->CoreResult<ProjectMigrationPlan>{
+        self.ensure_running()?;let plan=crate::migration::prepare(directory)?;
+        lock(&self.inner.migrations)?.insert(plan.id.clone(),plan.clone());Ok(plan)
+    }
+    pub fn apply_project_migration(&self, directory:&Path, plan_id:&str)->CoreResult<ProjectMigrationReceipt>{
+        let _operation=lock(&self.inner.operation)?;self.ensure_running()?;
+        let plan=lock(&self.inner.migrations)?.remove(plan_id).ok_or_else(||CoreError::new("migration_plan_stale","当前会话没有此迁移计划，或计划已经使用，请重新预览"))?;
+        crate::migration::apply(directory,&plan)
+    }
 
     /// 退出时先持久化取消意图，再等待所有监督线程确认真实子进程结束。
     pub fn shutdown(&self) -> CoreResult<()> {

@@ -31,7 +31,7 @@ export const run: RunRecord = {
   environment, result, error: null,
 };
 export const project: ProjectState = {
-  project: { id: model.projectId, name: '测试研究', path: 'C:/Research/测试研究', createdAt: model.createdAt, schemaVersion: 1 },
+  project: { id: model.projectId, name: '测试研究', path: 'C:/Research/测试研究', createdAt: model.createdAt, schemaVersion: 2 },
   models: [model], runs: [run],
 };
 export const preflight: PreflightReport = {

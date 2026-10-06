@@ -7,6 +7,11 @@ describe('跨语言返回契约', () => {
   it('接受完整项目和真实结果结构', () => {
     expect(projectStateSchema.parse(project)).toEqual(project);
   });
+  it('旧格式项目必须经过迁移，模型与运行来源不能错配', () => {
+    expect(projectStateSchema.safeParse({ ...project, project: { ...project.project, schemaVersion: 1 } }).success).toBe(false);
+    expect(projectStateSchema.safeParse({ ...project, runs: [{ ...run, modelVersionId: 'missing' }] }).success).toBe(false);
+    expect(projectStateSchema.safeParse({ ...project, models: [{ ...project.models[0], config: { ...project.models[0].config, throatRadius: 2 } }] }).success).toBe(false);
+  });
   it('拒绝错误状态与损坏数值', () => {
     expect(runRecordSchema.safeParse({ ...run, state: 'success' }).success).toBe(false);
     const broken = structuredClone(result);

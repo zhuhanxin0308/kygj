@@ -17,6 +17,8 @@ import { RAY_COLORS } from '../visualization/palette';
 import { ConfigEditor } from './ConfigEditor';
 import { EnvironmentDetails, RecordInspector } from './RecordInspector';
 import { useWorkspace } from './useWorkspace';
+import { VerificationPanel } from './VerificationPanel';
+import { MigrationPreview } from './MigrationPreview';
 
 // 大型可视化依赖独立加载，项目表单和宿主操作无需等待其解析完成。
 const ResearchScene = lazy(() => import('../visualization/ResearchScene').then((module) => ({ default: module.ResearchScene })));
@@ -161,7 +163,12 @@ export function Workbench({ client = desktopClient, dialogs = fileDialogs }: Pro
               <Space className="inspector-actions"><Button icon={<SaveOutlined />} disabled={!state.project || busy || !inputValid} onClick={() => void workspace.saveModel(versionLabel)}>保存版本</Button><Button icon={<ReloadOutlined />} disabled={!selectedModel || busy} onClick={() => selectedModel && workspace.dispatch({ type: 'modelSelected', id: selectedModel.id })}>还原草稿</Button></Space>
               <Alert type="info" showIcon title="先保存模型与选择环境，再预检运行。" />
             </> },
-            { key: 'validation', label: '验证', children: <RecordInspector run={selectedRun} trajectory={trajectory} onSeek={seek} /> },
+            { key: 'validation', label: '验证', children: <>
+              <VerificationPanel key={`${state.project?.project.id}:${selectedRun?.id}`} client={client} projectId={state.project?.project.id ?? null} run={selectedRun} />
+              <Typography.Title level={5}>原运行时引擎检查</Typography.Title>
+              <Typography.Paragraph type="secondary">以下为计算引擎随产物返回的原始检查；独立规则重检不覆盖这些历史值。</Typography.Paragraph>
+              <RecordInspector run={selectedRun} trajectory={trajectory} onSeek={seek} />
+            </> },
             { key: 'source', label: '来源', children: selectedRun ? <>
               <Descriptions column={1} size="small" items={[
                 { key: 'run', label: '运行', children: <code className="break-all">{selectedRun.id}</code> },
@@ -180,7 +187,9 @@ export function Workbench({ client = desktopClient, dialogs = fileDialogs }: Pro
           </div>
         </aside>
       </div>
-      <footer className="statusbar"><span><span className={`live-dot ${available ? '' : 'muted'}`} />{busy ? '正在处理操作' : available ? '桌面宿主已连接' : '仅公式预览'}</span><span>执行 <b>{activeRuns}</b> 项活动</span><span>验证 {selectedRun ? VALIDATION_LABELS[selectedRun.validationStatus] : '尚未检查'}</span><span>复核 未记录</span><span className="status-end">{result ? `${result.trajectories.length} 条真实轨迹` : '无计算产物'} · {state.environment ? `Python ${state.environment.pythonVersion}` : '环境未探测'}</span></footer>
+      <footer className="statusbar"><span><span className={`live-dot ${available ? '' : 'muted'}`} />{busy ? '正在处理操作' : available ? '桌面宿主已连接' : '仅公式预览'}</span><span>执行 <b>{activeRuns}</b> 项活动</span><span>引擎检查 {selectedRun ? VALIDATION_LABELS[selectedRun.validationStatus] : '尚未检查'}</span><span>复核 未记录</span><span className="status-end">{result ? `${result.trajectories.length} 条真实轨迹` : '无计算产物'} · {state.environment ? `Python ${state.environment.pythonVersion}` : '环境未探测'}</span></footer>
+      <MigrationPreview plan={workspace.migrationPlan} busy={busy} error={workspace.error} onCancel={workspace.cancelMigration}
+        onRefresh={() => void workspace.refreshMigration()} onConfirm={() => void workspace.confirmMigration()} />
       <Modal title="创建本地研究项目" open={createOpen} onCancel={() => setCreateOpen(false)} okText="选择目录并创建" cancelText="取消" confirmLoading={busy} okButtonProps={{ disabled: !available }} onOk={() => { void workspace.createProject(projectName).then(() => setCreateOpen(false)); }}>
         <Typography.Paragraph>在所选父目录中创建项目子目录。已有目录不会被覆盖。</Typography.Paragraph><Input aria-label="新项目名称" value={projectName} onChange={(event) => setProjectName(event.target.value)} />
       </Modal>
@@ -192,7 +201,7 @@ export function Workbench({ client = desktopClient, dialogs = fileDialogs }: Pro
         <Table rowKey="id" size="small" dataSource={state.project?.runs ?? []} pagination={{ pageSize: 10 }} columns={[
           { title: '运行身份', dataIndex: 'id', render: (id: string) => <Button type="link" onClick={() => { selectRun(id); setRunsOpen(false); }}>{id.slice(0, 16)}</Button> },
           { title: '执行', dataIndex: 'state', render: (value: keyof typeof RUN_LABELS) => RUN_LABELS[value] },
-          { title: '数值验证', dataIndex: 'validationStatus', render: (value: keyof typeof VALIDATION_LABELS) => VALIDATION_LABELS[value] },
+          { title: '原引擎检查', dataIndex: 'validationStatus', render: (value: keyof typeof VALIDATION_LABELS) => VALIDATION_LABELS[value] },
           { title: '创建时间', dataIndex: 'createdAt' },
         ]} />
       </Modal>

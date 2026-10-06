@@ -1,0 +1,71 @@
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ConfigProvider } from 'antd';
+import zhCN from 'antd/locale/zh_CN';
+import { VerificationPanel } from './VerificationPanel';
+import { createDesktopClient } from '../services/desktop';
+import { run } from '../test/fixtures';
+import { verificationRecord, verificationRule, verificationState } from '../test/verificationFixtures';
+
+// 通过公开界面执行与读取记录，检查状态不会由运行时绿色标签替代。
+afterEach(cleanup);
+describe('独立验证面板', () => {
+  it('空项目和无产物待处理状态明确阻止绿色通过与重复执行', async () => {
+    const client = createDesktopClient(vi.fn(), () => true);
+    client.listVerificationRules = vi.fn().mockResolvedValue({ rules: [verificationRule], total: 2, nextOffset: 1 });
+    client.listVerificationRecords = vi.fn().mockResolvedValue({ records: [], total: 1, nextOffset: 1 });
+    client.getRunVerificationState = vi.fn().mockResolvedValue({ ...verificationState, pendingRequestId: 'pending', conclusion: 'inconclusive' });
+    const { rerender } = render(<VerificationPanel client={client} projectId={null} run={null} />);
+    expect(screen.getByText('打开项目后管理独立验证规则。')).toBeInTheDocument();
+    rerender(<VerificationPanel client={client} projectId={run.projectId} run={{ ...run, result: null }} />);
+    expect(await screen.findByText('检查进行中，请刷新取得持久化结果。')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '执行独立验证' })).toBeDisabled();
+    expect(screen.getByText('当前运行没有计算产物；独立检查将记录产物缺口。')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '加载更多规则版本' }));
+    await waitFor(() => expect(client.listVerificationRules).toHaveBeenCalledTimes(2));
+    fireEvent.click(await screen.findByRole('button', { name: '加载更多历史记录' }));
+    await waitFor(() => expect(client.listVerificationRecords).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole('button', { name: '刷新独立验证' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: '刷新独立验证' }));
+    await waitFor(() => expect(client.getRunVerificationState).toHaveBeenCalledTimes(2));
+  }, 20000);
+  it('显示未执行、完整依据、历史实际值与运行产物来源', async () => {
+    const client = createDesktopClient(vi.fn(), () => true);
+    client.listVerificationRules = vi.fn().mockResolvedValue({ rules: [verificationRule], total: 1, nextOffset: null });
+    client.listVerificationRecords = vi.fn().mockResolvedValue({ records: [verificationRecord], total: 1, nextOffset: null });
+    client.getRunVerificationState = vi.fn().mockResolvedValue(verificationState);
+    client.getVerificationRecord = vi.fn().mockResolvedValue(verificationRecord);
+    client.executeVerification = vi.fn().mockResolvedValue(verificationRecord);
+    render(<ConfigProvider locale={zhCN}><VerificationPanel client={client} projectId={run.projectId} run={run} /></ConfigProvider>);
+    expect(await screen.findByText('尚未执行独立验证')).toBeInTheDocument();
+    expect(client.executeVerification).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '查看所选规则完整依据' }));
+    const ruleDialog = await screen.findByRole('dialog', { name: '独立验证规则' });
+    expect(within(ruleDialog).getByText('研究方案完整依据')).toBeInTheDocument();
+    expect(within(ruleDialog).getByText(verificationRule.contentHash)).toBeInTheDocument();
+    fireEvent.click(within(ruleDialog).getByRole('button', { name: '关闭' }));
+    fireEvent.click(screen.getByRole('button', { name: '查看验证记录 verification-1' }));
+    const recordDialog = await screen.findByRole('dialog', { name: '独立验证历史记录' });
+    expect(within(recordDialog).getByText(verificationRecord.source.resultHash!)).toBeInTheDocument();
+    expect(within(recordDialog).getByText('实际误差在阈值内')).toBeInTheDocument();
+    expect(within(recordDialog).getByText('trajectories[0].diagnostics.maxEnergyError')).toBeInTheDocument();
+    fireEvent.click(within(recordDialog).getByRole('button', { name: '关闭' }));
+    fireEvent.click(await screen.findByRole('button', { name: '执行独立验证' }));
+    await waitFor(() => expect(client.executeVerification).toHaveBeenCalledTimes(1));
+  }, 20000);
+  it('阈值与依据修改通过显式新版本表单提交，原规则保留', async () => {
+    const client = createDesktopClient(vi.fn(), () => true);
+    client.listVerificationRules = vi.fn().mockResolvedValue({ rules: [verificationRule], total: 1, nextOffset: null });
+    client.listVerificationRecords = vi.fn().mockResolvedValue({ records: [], total: 0, nextOffset: null });
+    client.getRunVerificationState = vi.fn().mockResolvedValue(verificationState);
+    client.saveVerificationRuleVersion = vi.fn().mockResolvedValue({ ...verificationRule, id: 'rule-2', parentVersionId: verificationRule.id });
+    render(<ConfigProvider locale={zhCN}><VerificationPanel client={client} projectId={run.projectId} run={run} /></ConfigProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: '创建规则新版本' }));
+    const editor = await screen.findByRole('dialog', { name: '创建独立规则新版本' });
+    fireEvent.change(within(editor).getByLabelText('规则版本名称'), { target: { value: '按新方案检查' } });
+    fireEvent.change(within(editor).getByLabelText('变更理由'), { target: { value: '研究方案版本更新' } });
+    fireEvent.change(within(editor).getByLabelText('能量误差依据'), { target: { value: '新研究方案完整依据' } });
+    fireEvent.click(within(editor).getByRole('button', { name: '保存为新规则版本' }));
+    await waitFor(() => expect(client.saveVerificationRuleVersion).toHaveBeenCalledWith(run.projectId, expect.objectContaining({ baseVersionId: verificationRule.id, changeReason: '研究方案版本更新' })));
+  }, 20000);
+});

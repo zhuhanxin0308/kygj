@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useWorkspace } from './useWorkspace';
 import type { DesktopClient, FileDialogs } from '../services/desktop';
 import { environment, model, preflight, project, run } from '../test/fixtures';
+import { migrationPlan, verificationState } from '../test/verificationFixtures';
 
 // 用受控 IPC 传输检查提交顺序、失败保留和取消语义，后台没有实际进程。
 const makeClient = () => ({
@@ -13,11 +14,64 @@ const makeClient = () => ({
   startRun: vi.fn().mockResolvedValue({ ...run, state: 'running', result: null }),
   getRun: vi.fn().mockResolvedValue(run), cancelRun: vi.fn().mockResolvedValue({ ...run, state: 'cancelling' }),
   exportRun: vi.fn().mockResolvedValue({ path: 'C:/Export/run.json', sha256: 'c'.repeat(64) }),
+  listVerificationRules: vi.fn().mockResolvedValue({ rules: [], total: 0, nextOffset: null }),
+  listVerificationRecords: vi.fn().mockResolvedValue({ records: [], total: 0, nextOffset: null }),
+  getRunVerificationState: vi.fn().mockResolvedValue(verificationState), executeVerification: vi.fn(),
+  saveVerificationRuleVersion: vi.fn(), getVerificationRecord: vi.fn(),
+  prepareProjectMigration: vi.fn().mockResolvedValue(migrationPlan), applyProjectMigration: vi.fn(),
 }) satisfies DesktopClient;
 const makeDialogs = () => ({ directory: vi.fn().mockResolvedValue('C:/Research'), python: vi.fn().mockResolvedValue('C:/Python/python.exe') }) satisfies FileDialogs;
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe('真实工作区操作编排', () => {
+  it('旧项目先预览迁移，取消不修改项目，明确确认后按回执重新打开', async () => {
+    const client = makeClient();
+    client.openProject.mockRejectedValueOnce({ code: 'migration_required', message: '需要预览迁移' });
+    const { result } = renderHook(() => useWorkspace(client, makeDialogs()));
+    await act(() => result.current.openProject());
+    expect(result.current.migrationPlan).toEqual(migrationPlan);
+    expect(client.applyProjectMigration).not.toHaveBeenCalled();
+    act(() => result.current.cancelMigration());
+    expect(result.current.migrationPlan).toBeNull();
+    client.openProject.mockRejectedValueOnce({ code: 'migration_required', message: '需要预览迁移' });
+    await act(() => result.current.openProject());
+    client.applyProjectMigration.mockResolvedValue({ planId: migrationPlan.id, directory: migrationPlan.directory, projectId: migrationPlan.projectId, fromVersion: 1, toVersion: 2, backupPath: migrationPlan.backupPath, backupSha256: 'f'.repeat(64), migratedAt: model.createdAt, legacyResultCount: 1 });
+    await act(() => result.current.confirmMigration());
+    expect(client.applyProjectMigration).toHaveBeenCalledWith(migrationPlan.directory, migrationPlan.id);
+    expect(client.openProject).toHaveBeenLastCalledWith(migrationPlan.directory);
+    expect(result.current.state.project?.project.id).toBe(migrationPlan.projectId);
+    expect(result.current.migrationPlan).toBeNull();
+    expect(result.current.notice).toContain(migrationPlan.backupPath);
+  });
+  it('迁移计划过期保留原项目与预览，重新预览不能自动执行', async () => {
+    const client = makeClient();
+    const { result } = renderHook(() => useWorkspace(client, makeDialogs()));
+    await act(() => result.current.openProject());
+    client.openProject.mockRejectedValueOnce({ code: 'migration_required', message: '需要迁移' });
+    await act(() => result.current.openProject());
+    client.applyProjectMigration.mockRejectedValue({ code: 'migration_plan_stale', message: '项目已变化，请重新预览' });
+    await act(() => result.current.confirmMigration());
+    expect(result.current.state.project).toEqual(project);
+    expect(result.current.error).toContain('重新预览');
+    await act(() => result.current.refreshMigration());
+    expect(client.applyProjectMigration).toHaveBeenCalledTimes(1);
+    expect(client.prepareProjectMigration).toHaveBeenLastCalledWith(migrationPlan.directory);
+  });
+  it('已完成迁移但读取失败时保留成功回执，重试只打开项目不重复迁移', async () => {
+    const client = makeClient();
+    client.openProject.mockRejectedValueOnce({ code: 'migration_required', message: '需要迁移' });
+    client.applyProjectMigration.mockResolvedValue({ planId: migrationPlan.id, directory: migrationPlan.directory, projectId: migrationPlan.projectId, fromVersion: 1, toVersion: 2, backupPath: migrationPlan.backupPath, backupSha256: 'f'.repeat(64), migratedAt: model.createdAt, legacyResultCount: 1 });
+    const { result } = renderHook(() => useWorkspace(client, makeDialogs()));
+    await act(() => result.current.openProject());
+    client.openProject.mockRejectedValueOnce({ code: 'read_failed', message: '迁移成功后暂时读取失败' });
+    await act(() => result.current.confirmMigration());
+    expect(result.current.migrationReceipt?.planId).toBe(migrationPlan.id);
+    expect(result.current.migrationPlan).toBeNull();
+    await act(() => result.current.retryMigratedProject());
+    expect(client.applyProjectMigration).toHaveBeenCalledTimes(1);
+    expect(client.openProject).toHaveBeenLastCalledWith(migrationPlan.directory);
+    expect(result.current.state.project?.project.id).toBe(migrationPlan.projectId);
+  });
   it('创建项目、保存版本、探测、预检、提交、查询与导出闭环', async () => {
     const client = makeClient();
     const dialogs = makeDialogs();

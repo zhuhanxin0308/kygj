@@ -37,9 +37,11 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
     case 'draftChanged': return { ...state, draft: { ...state.draft, ...action.patch }, preflight: null };
     case 'pythonChanged': return { ...state, pythonExecutable: action.path, environment: null, preflight: null };
     case 'environmentReceived': return { ...state, environment: action.environment, pythonExecutable: action.environment.pythonExecutable, preflight: null };
-    case 'preflightReceived': return { ...state, preflight: action.preflight };
+    case 'preflightReceived': return action.preflight.projectId === state.project?.project.id
+      && state.project.models.some((model) => model.id === action.preflight.modelVersionId)
+      ? { ...state, preflight: action.preflight } : state;
     case 'preflightCleared': return { ...state, preflight: null };
-    case 'modelSaved': return state.project ? {
+    case 'modelSaved': return state.project && action.model.projectId === state.project.project.id ? {
       ...state, project: { ...state.project, models: [action.model, ...state.project.models] },
       selectedModelId: action.model.id, draft: action.model.config, preflight: null,
     } : state;
@@ -47,7 +49,8 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
       const model = state.project?.models.find((item) => item.id === action.id);
       return model ? { ...state, selectedModelId: model.id, draft: model.config, preflight: null } : state;
     }
-    case 'runSelected': return { ...state, selectedRunId: action.id };
+    case 'runSelected': return state.project?.runs.some((run) => run.id === action.id)
+      ? { ...state, selectedRunId: action.id } : state;
     case 'runReceived': {
       if (!state.project || action.run.projectId !== state.project.project.id) return state;
       const previous = state.project.runs.find((run) => run.id === action.run.id);

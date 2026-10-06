@@ -8,6 +8,10 @@ mod schema;
 pub mod storage;
 pub mod types;
 pub mod validation;
+pub mod verification_types;
+mod verification;
+mod verification_storage;
+mod migration;
 mod workbench;
 
 pub use error::{CoreError, CoreResult};

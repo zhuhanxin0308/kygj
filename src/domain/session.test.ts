@@ -57,4 +57,10 @@ describe('工作区状态边界', () => {
     expect(completed.project?.runs[0].state).toBe('completed');
     expect(sessionReducer(completed, { type: 'runReceived', run: running })).toBe(completed);
   });
+  it('旧项目的版本与预检响应不能写入当前项目，未知运行不能被选中', () => {
+    const loaded = sessionReducer(initialSession, { type: 'projectLoaded', project });
+    expect(sessionReducer(loaded, { type: 'modelSaved', model: { ...model, projectId: 'other' } })).toBe(loaded);
+    expect(sessionReducer(loaded, { type: 'preflightReceived', preflight: { ...preflight, projectId: 'other' } })).toBe(loaded);
+    expect(sessionReducer(loaded, { type: 'runSelected', id: 'other-run' })).toBe(loaded);
+  });
 });

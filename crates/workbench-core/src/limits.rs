@@ -2,7 +2,7 @@ use std::time::Duration;
 
 /// 协议与资源保护限额集中声明；不是科研精度或许可配额。
 pub const PROTOCOL_VERSION: u32 = 1;
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 pub const MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_STDERR_BYTES: usize = 512 * 1024;

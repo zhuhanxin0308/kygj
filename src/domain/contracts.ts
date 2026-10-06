@@ -70,10 +70,12 @@ export const runRecordSchema = z.strictObject({
     return record.validationStatus === aggregate;
   }, { message: '运行验证状态必须与实际轨迹的聚合状态一致。' });
 export const projectStateSchema = z.strictObject({
-  project: z.strictObject({ id: identifier, name: identifier, path: identifier, createdAt: timestamp, schemaVersion: z.literal(1) }),
+  project: z.strictObject({ id: identifier, name: identifier, path: identifier, createdAt: timestamp, schemaVersion: z.literal(2) }),
   models: z.array(modelVersionSchema), runs: z.array(runRecordSchema),
 }).refine((state) => state.models.every((model) => model.projectId === state.project.id)
-  && state.runs.every((run) => run.projectId === state.project.id), { message: '对象必须属于当前项目。' });
+  && state.runs.every((run) => run.projectId === state.project.id
+    && state.models.some((model) => model.id === run.modelVersionId && configsEqual(model.config, run.request.config))),
+{ message: '对象必须属于当前项目，运行必须匹配已保存模型。' });
 export const preflightSchema = z.strictObject({
   id: identifier, projectId: identifier, modelVersionId: identifier, config: configSchema,
   environment: environmentSchema, createdAt: timestamp, status: z.enum(['ready', 'blocked']), issues: z.array(errorSchema),
