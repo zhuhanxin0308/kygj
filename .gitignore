@@ -1,0 +1,23 @@
+# 本地依赖、构建产物和研究数据不进入源码版本库。
+node_modules/
+dist/
+coverage/
+target/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+.local/
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.log
+
