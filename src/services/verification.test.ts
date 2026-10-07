@@ -74,4 +74,25 @@ describe('独立验证与迁移 IPC', () => {
     transport.mockResolvedValueOnce({ records: [verificationRecord], total: 1, nextOffset: null });
     await expect(client.listVerificationRecords(verificationRule.projectId, verificationRecord.runId, 1, 20)).rejects.toMatchObject({ code: 'invalid_response' });
   });
+  it('派生版本逐字核对依据与理由，不接受被裁剪的冻结内容', async () => {
+    const transport = vi.fn(); const client = createDesktopClient(transport, () => true);
+    const draft = { baseVersionId: verificationRule.id, title: '  新规则  ', changeReason: '  第一段\n第二段  ', thresholds: verificationRule.checks.map(({ metricId, threshold }) => ({ metricId, threshold, basis: '  研究方案\r\n\t原始依据  ' })) };
+    const newRule = { ...verificationRule, id: 'rule-2', parentVersionId: verificationRule.id, builtin: false, title: draft.title, changeReason: draft.changeReason, checks: verificationRule.checks.map((check) => ({ ...check, basis: draft.thresholds[0].basis })) };
+    transport.mockResolvedValueOnce(newRule);
+    expect(await client.saveVerificationRuleVersion(verificationRule.projectId, draft)).toEqual(newRule);
+    expect(transport).toHaveBeenLastCalledWith('save_verification_rule_version', { request: { projectId: verificationRule.projectId, draft } });
+    transport.mockResolvedValueOnce({ ...newRule, checks: newRule.checks.map((check) => ({ ...check, basis: check.basis.trim() })) });
+    await expect(client.saveVerificationRuleVersion(verificationRule.projectId, draft)).rejects.toMatchObject({ code: 'invalid_response' });
+  });
+  it('空页和最后一页不生成游标，有剩余项时空页不能使分页停滞', async () => {
+    const transport = vi.fn(); const client = createDesktopClient(transport, () => true);
+    transport.mockResolvedValueOnce({ rules: [], total: 0, nextOffset: null });
+    expect((await client.listVerificationRules(verificationRule.projectId, 0, 20)).rules).toEqual([]);
+    transport.mockResolvedValueOnce({ records: [verificationRecord], total: 2, nextOffset: null });
+    expect((await client.listVerificationRecords(verificationRule.projectId, verificationRecord.runId, 1, 20)).total).toBe(2);
+    transport.mockResolvedValueOnce({ rules: [], total: 2, nextOffset: 0 });
+    await expect(client.listVerificationRules(verificationRule.projectId, 0, 20)).rejects.toMatchObject({ code: 'invalid_response' });
+    transport.mockResolvedValueOnce({ rules: [verificationRule], total: 1, nextOffset: 1 });
+    await expect(client.listVerificationRules(verificationRule.projectId, 0, 20)).rejects.toMatchObject({ code: 'invalid_response' });
+  });
 });

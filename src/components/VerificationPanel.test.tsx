@@ -10,6 +10,25 @@ import { verificationRecord, verificationRule, verificationState } from '../test
 // 通过公开界面执行与读取记录，检查状态不会由运行时绿色标签替代。
 afterEach(cleanup);
 describe('独立验证面板', () => {
+  it('首次规则加载失败仍可刷新恢复，执行回复丢失提供原请求重试入口', async () => {
+    const client = createDesktopClient(vi.fn(), () => true);
+    client.listVerificationRules = vi.fn().mockRejectedValueOnce({ code: 'temporary', message: '规则目录暂不可读' }).mockResolvedValue({ rules: [verificationRule], total: 1, nextOffset: null });
+    client.listVerificationRecords = vi.fn().mockResolvedValue({ records: [], total: 0, nextOffset: null });
+    client.getRunVerificationState = vi.fn().mockResolvedValue(verificationState);
+    client.executeVerification = vi.fn().mockRejectedValueOnce({ code: 'connection_lost', message: '执行回复丢失' }).mockResolvedValue(verificationRecord);
+    render(<VerificationPanel client={client} projectId={run.projectId} run={run} />);
+    expect(await screen.findByText('规则目录暂不可读')).toBeInTheDocument();
+    const refresh = screen.getByRole('button', { name: '刷新独立验证' });
+    expect(refresh).toBeEnabled();
+    fireEvent.click(refresh);
+    await screen.findByText('尚未执行独立验证');
+    fireEvent.click(screen.getByRole('button', { name: '执行独立验证' }));
+    const retry = await screen.findByRole('button', { name: '重试原独立验证请求' });
+    await waitFor(() => expect(retry).toBeEnabled());
+    const original = vi.mocked(client.executeVerification).mock.calls[0][1];
+    fireEvent.click(retry);
+    await waitFor(() => expect(vi.mocked(client.executeVerification).mock.calls[1][1]).toEqual(original));
+  }, 20000);
   it('空项目和无产物待处理状态明确阻止绿色通过与重复执行', async () => {
     const client = createDesktopClient(vi.fn(), () => true);
     client.listVerificationRules = vi.fn().mockResolvedValue({ rules: [verificationRule], total: 2, nextOffset: 1 });

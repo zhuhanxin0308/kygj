@@ -111,3 +111,50 @@ fn concurrent_shutdown_cannot_skip_worker_owned_by_first_closer() {
     assert!(await_result.recv_timeout(TEST_DEADLINE).unwrap().is_ok());
     assert_eq!(store.run(&key.1).unwrap().state, RunState::Cancelled);
 }
+
+#[test]
+fn rule_version_commit_participates_in_the_host_shutdown_operation_gate() {
+    use std::{sync::mpsc, time::Duration};
+    const PREMATURE_COMMIT_WINDOW: Duration = Duration::from_millis(100);
+    const TEST_DEADLINE: Duration = Duration::from_secs(2);
+    let directory = tempfile::tempdir().unwrap();
+    let workbench = Workbench::new();
+    let project = workbench.create_project(directory.path(), "关闭与规则提交").unwrap();
+    let rule = workbench.list_verification_rules(&project.project.id, 0, 20).unwrap().rules.remove(0);
+    let draft = VerificationRuleDraft {base_version_id:rule.id,title:"关闭前规则".into(),change_reason:"保留研究者修订".into(),thresholds:rule.checks.iter().map(|check|VerificationThreshold {metric_id:check.metric_id,threshold:check.threshold,basis:check.basis.clone()}).collect()};
+    // 持有与shutdown相同的操作门：新规则不能越过正在进行的关闭决定写入数据库。
+    let gate = workbench.inner.operation.lock().unwrap();
+    let writer = workbench.clone(); let project_id = project.project.id.clone();
+    let (ready, await_ready) = mpsc::channel(); let (finished, await_finished) = mpsc::channel();
+    let worker = thread::spawn(move || {ready.send(()).unwrap();finished.send(writer.save_verification_rule_version(&project_id, draft)).unwrap();});
+    await_ready.recv_timeout(TEST_DEADLINE).unwrap();
+    let premature = await_finished.recv_timeout(PREMATURE_COMMIT_WINDOW);
+    // 模拟关闭在持锁状态下停止接受写入，然后释放等待者；无论结果均回收线程。
+    workbench.inner.stopping.store(true, Ordering::SeqCst); drop(gate); worker.join().unwrap();
+    assert!(matches!(premature, Err(mpsc::RecvTimeoutError::Timeout)), "规则提交不能绕过退出操作门：{premature:?}");
+    assert_eq!(await_finished.recv_timeout(TEST_DEADLINE).unwrap().unwrap_err().code, "host_stopping");
+    assert_eq!(workbench.list_verification_rules(&project.project.id, 0, 20).unwrap().total, 1);
+}
+
+#[test]
+fn model_version_commit_cannot_bypass_the_host_shutdown_operation_gate() {
+    use std::{sync::mpsc, time::Duration};
+    const PREMATURE_COMMIT_WINDOW: Duration = Duration::from_millis(100);
+    const TEST_DEADLINE: Duration = Duration::from_secs(2);
+    let directory = tempfile::tempdir().unwrap();
+    let workbench = Workbench::new();
+    let project = workbench.create_project(directory.path(), "关闭与模型提交").unwrap();
+    let config = EllisConfig { throat_radius:1.0,initial_radius:10.0,impact_parameters:vec![0.0],max_affine_parameter:20.0,sample_count:3,relative_tolerance:1e-10,absolute_tolerance:1e-12 };
+    // 模型版本和规则版本一样是持久研究对象，关闭决定必须排除所有后续写入。
+    let gate = workbench.inner.operation.lock().unwrap();
+    let writer = workbench.clone(); let project_id = project.project.id.clone();
+    let (ready, await_ready) = mpsc::channel(); let (finished, await_finished) = mpsc::channel();
+    let worker = thread::spawn(move || {ready.send(()).unwrap();finished.send(writer.save_model(&project_id, "关闭前模型", config)).unwrap();});
+    await_ready.recv_timeout(TEST_DEADLINE).unwrap();
+    let premature = await_finished.recv_timeout(PREMATURE_COMMIT_WINDOW);
+    // 先释放并回收线程再断言，失败用例也不得留下阻塞线程。
+    workbench.inner.stopping.store(true, Ordering::SeqCst); drop(gate); worker.join().unwrap();
+    assert!(matches!(premature, Err(mpsc::RecvTimeoutError::Timeout)), "模型提交不能绕过退出操作门：{premature:?}");
+    assert_eq!(await_finished.recv_timeout(TEST_DEADLINE).unwrap().unwrap_err().code, "host_stopping");
+    assert!(workbench.get_project(&project.project.id).unwrap().models.is_empty());
+}

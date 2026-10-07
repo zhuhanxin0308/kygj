@@ -1,9 +1,11 @@
-import { Descriptions, Form, Input, InputNumber, Modal, Table, Tag, Typography, theme } from 'antd';
-import { CONCLUSION_LABELS, VERIFICATION_PAGE_SIZE, type VerificationRecord, type VerificationRuleDraft, type VerificationRuleVersion } from '../domain/verification';
+import { Descriptions, Form, Input, InputNumber, Modal, Table, Typography, theme } from 'antd';
+import { CONCLUSION_LABELS, VERIFICATION_PAGE_SIZE, verificationParagraphSchema, verificationTextSchema, type VerificationRecord, type VerificationRuleDraft, type VerificationRuleVersion } from '../domain/verification';
+import { DesignNotice, SemanticTag } from './DesignNotice';
 
 const numberText = (value: number | null) => value === null ? '未取得实际值' : value === 0 ? '0' : value.toExponential(8);
 export function VerificationStatus({ conclusion }: { conclusion: VerificationRecord['conclusion'] }) {
-  return <Tag color={conclusion === 'passed' ? 'green' : conclusion === 'failed' ? 'red' : 'gold'}>{CONCLUSION_LABELS[conclusion]}</Tag>;
+  const tones = { passed: 'success', failed: 'error', missing_artifact: 'warning', inconclusive: 'warning', not_run: 'neutral', not_applicable: 'neutral' } as const;
+  return <SemanticTag tone={tones[conclusion]}>{CONCLUSION_LABELS[conclusion]}</SemanticTag>;
 }
 
 // 历史详情使用记录自身冻结的实际值、依据与来源，不借用当前编辑规则。
@@ -29,12 +31,12 @@ export function VerificationRecordDetails({ record }: { record: VerificationReco
       { key: 'format', label: '哈希格式', children: record.source.hashFormat },
       { key: 'hash', label: '验证记录 SHA-256', children: <code className="break-all">{record.contentHash}</code> },
     ]} />
-    {record.error && <Typography.Paragraph type="danger">{record.error.code}：{record.error.message}</Typography.Paragraph>}
+    {record.error && <DesignNotice type="error" title={`${record.error.code}：${record.error.message}`} />}
     <Table size="small" rowKey={(check) => `${check.metricId}:${check.trajectoryIndex}`} dataSource={record.checks} pagination={{ pageSize: VERIFICATION_PAGE_SIZE }} scroll={{ x: token.screenMD }} columns={[
       { title: '检查与光线', key: 'metric', render: (_, check) => <>{check.title}<br />{check.trajectoryIndex === null ? '运行级检查' : `光线 ${check.trajectoryIndex + 1}，b = ${check.impactParameter}`}</> },
       { title: '实际值 / 冻结阈值', key: 'values', render: (_, check) => <span className="numeric">{numberText(check.actual)}<br />≤ {numberText(check.threshold)}<br />{check.unit}</span> },
       { title: '结论与原因', key: 'conclusion', render: (_, check) => <><VerificationStatus conclusion={check.conclusion} /><p>{check.message}</p><code>{check.reasonCode}</code></> },
-      { title: '冻结依据与证据', key: 'evidence', render: (_, check) => <><p>{check.basis}</p><p>证据范围：{check.evidenceScope}</p>{check.evidencePaths.map((path) => <div key={path}><code className="break-all">{path}</code></div>)}</> },
+      { title: '冻结依据与证据', key: 'evidence', render: (_, check) => <><p style={{ whiteSpace: 'pre-wrap' }}>{check.basis}</p><p>证据范围：{check.evidenceScope}</p>{check.evidencePaths.map((path) => <div key={path}><code className="break-all">{path}</code></div>)}</> },
     ]} />
   </>;
 }
@@ -47,17 +49,21 @@ export function VerificationRuleDetails({ rule }: { rule: VerificationRuleVersio
       { key: 'family', label: '规则系列', children: rule.ruleFamilyId }, { key: 'parent', label: '父版本', children: rule.parentVersionId ?? '初始版本' },
       { key: 'method', label: '检查方法与版本', children: `${rule.methodId} · ${rule.methodVersion}` },
       { key: 'author', label: '创建者 / 时间', children: `${rule.createdBy} / ${rule.createdAt}` },
-      { key: 'reason', label: '版本变更理由', children: rule.changeReason }, { key: 'type', label: '规则来源', children: rule.builtin ? '内置预定义规则' : '研究者派生版本' },
+      { key: 'reason', label: '版本变更理由', children: <span style={{ whiteSpace: 'pre-wrap' }}>{rule.changeReason}</span> }, { key: 'type', label: '规则来源', children: rule.builtin ? '内置预定义规则' : '研究者派生版本' },
       { key: 'hash', label: '规则 SHA-256', children: <code className="break-all">{rule.contentHash}</code> },
     ]} />
     <Table rowKey="metricId" size="small" dataSource={rule.checks} pagination={false} scroll={{ x: token.screenMD }} columns={[
       { title: '检查', dataIndex: 'title' }, { title: '阈值', key: 'threshold', render: (_, check) => `≤ ${numberText(check.threshold)} ${check.unit}` },
-      { title: '完整依据', dataIndex: 'basis' }, { title: '适用条件', dataIndex: 'applicability' }, { title: '证据范围', dataIndex: 'evidenceScope' },
+      { title: '完整依据', key: 'basis', render: (_, check) => <span style={{ whiteSpace: 'pre-wrap' }}>{check.basis}</span> }, { title: '适用条件', dataIndex: 'applicability' }, { title: '证据范围', dataIndex: 'evidenceScope' },
     ]} />
   </>;
 }
 
 // 全部指标继承旧规则，任何阈值或依据修改均保存成新版本。
+const validateRuleText = (schema: typeof verificationTextSchema) => (_: unknown, value: unknown) => {
+  const parsed = schema.safeParse(value);
+  return parsed.success ? Promise.resolve() : Promise.reject(new Error(parsed.error.issues[0].message));
+};
 export function VerificationRuleEditor({ rule, busy, onSave, onClose }: {
   rule: VerificationRuleVersion; busy: boolean; onSave(draft: VerificationRuleDraft): Promise<boolean>; onClose(): void;
 }) {
@@ -67,13 +73,13 @@ export function VerificationRuleEditor({ rule, busy, onSave, onClose }: {
     onOk={() => { void form.validateFields().then(async (draft) => { if (await onSave({ ...draft, baseVersionId: rule.id })) onClose(); }).catch(() => undefined); }}>
     <Typography.Paragraph>原规则与历史失败记录永久保留。请输入研究依据和变更理由，新规则需另行执行检查。</Typography.Paragraph>
     <Form form={form} layout="vertical" initialValues={{ title: rule.title, changeReason: '', thresholds: rule.checks.map(({ metricId, threshold, basis }) => ({ metricId, threshold, basis })) }} disabled={busy}>
-      <Form.Item name="title" label="规则版本名称" rules={[{ required: true, whitespace: true, message: '请填写版本名称。' }]}><Input /></Form.Item>
-      <Form.Item name="changeReason" label="变更理由" rules={[{ required: true, whitespace: true, message: '请说明变更理由。' }]}><Input.TextArea autoSize /></Form.Item>
+      <Form.Item name="title" label="规则版本名称" rules={[{ required: true, whitespace: true, message: '请填写版本名称。' }, { validator: validateRuleText(verificationTextSchema) }]}><Input /></Form.Item>
+      <Form.Item name="changeReason" label="变更理由" rules={[{ required: true, whitespace: true, message: '请说明变更理由。' }, { validator: validateRuleText(verificationParagraphSchema) }]}><Input.TextArea autoSize /></Form.Item>
       {rule.checks.map((check, index) => <div key={check.metricId}>
         <Typography.Title level={5}>{check.title}</Typography.Title><Typography.Paragraph type="secondary">{check.applicability} · {check.evidenceScope}</Typography.Paragraph>
         <Form.Item name={['thresholds', index, 'metricId']} hidden><Input /></Form.Item>
-        <Form.Item name={['thresholds', index, 'threshold']} label={`${check.title}阈值`} rules={[{ required: true, type: 'number', min: 0, message: '请填写有限非负数。' }]}><InputNumber min={0} style={{ width: '100%' }} /></Form.Item>
-        <Form.Item name={['thresholds', index, 'basis']} label={`${check.title}依据`} rules={[{ required: true, whitespace: true, message: '请填写完整依据。' }]}><Input.TextArea autoSize /></Form.Item>
+        <Form.Item name={['thresholds', index, 'threshold']} label={`${check.title}阈值`} extra={check.metricId === 'propagation_completion' ? '传播终止条件固定为零，不允许放宽。' : undefined} rules={[{ required: true, type: 'number', min: 0, message: '请填写有限非负数。' }]}><InputNumber min={0} disabled={busy || check.metricId === 'propagation_completion'} style={{ width: '100%' }} /></Form.Item>
+        <Form.Item name={['thresholds', index, 'basis']} label={`${check.title}依据`} rules={[{ required: true, whitespace: true, message: '请填写完整依据。' }, { validator: validateRuleText(verificationParagraphSchema) }]}><Input.TextArea autoSize /></Form.Item>
       </div>)}
     </Form>
   </Modal>;

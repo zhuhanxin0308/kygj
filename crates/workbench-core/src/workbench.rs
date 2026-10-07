@@ -190,7 +190,11 @@ impl Workbench {
 
     /// 独立验证接口只追加账本，所有对象先经当前已打开项目身份校验。
     pub fn list_verification_rules(&self, project_id:&str, offset:usize, limit:usize)->CoreResult<VerificationRulePage>{self.project(project_id)?.list_verification_rules(offset,limit)}
-    pub fn save_verification_rule_version(&self, project_id:&str, draft:VerificationRuleDraft)->CoreResult<VerificationRuleVersion>{self.ensure_running()?;self.project(project_id)?.save_verification_rule_version(draft)}
+    pub fn save_verification_rule_version(&self, project_id:&str, draft:VerificationRuleDraft)->CoreResult<VerificationRuleVersion>{
+        // 规则追加与退出决策共用操作门，确保关闭确认后不会再提交研究对象版本。
+        let _operation=lock(&self.inner.operation)?;
+        self.ensure_running()?;self.project(project_id)?.save_verification_rule_version(draft)
+    }
     pub fn get_run_verification_state(&self, project_id:&str, run_id:&str, rule_version_id:&str)->CoreResult<RunVerificationState>{self.project(project_id)?.get_run_verification_state(run_id,rule_version_id)}
     pub fn execute_verification(&self, project_id:&str, request:ExecuteVerification)->CoreResult<VerificationRecord>{let _operation=lock(&self.inner.operation)?;self.ensure_running()?;self.project(project_id)?.execute_verification(request)}
     pub fn list_verification_records(&self, project_id:&str, run_id:&str, offset:usize, limit:usize)->CoreResult<VerificationRecordPage>{self.project(project_id)?.list_verification_records(run_id,offset,limit)}

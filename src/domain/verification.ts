@@ -2,7 +2,15 @@ import { z } from 'zod';
 import { errorSchema } from './contracts';
 
 // B22 使用独立版本和来源；运行时引擎检查保持原始内容，不在这里改写。
-const text = z.string().trim().min(1);
+export const VERIFICATION_TEXT_MAX_BYTES = 4096;
+export const PROPAGATION_COMPLETION_THRESHOLD = 0;
+// 与核心的 UTF-8 字节上限和控制字符规则保持一致，校验不能改写冻结文本。
+const utf8 = new TextEncoder();
+const preservedText = z.string().refine((value) => value.trim().length > 0, '内容不能为空。')
+  .refine((value) => utf8.encode(value).length <= VERIFICATION_TEXT_MAX_BYTES, '内容不能超过 4096 个 UTF-8 字节。');
+export const verificationTextSchema = preservedText.refine((value) => !/[\p{Cc}]/u.test(value), '单行内容不能包含控制字符。');
+export const verificationParagraphSchema = preservedText.refine((value) => !/[\p{Cc}]/u.test(value.replace(/[\n\r\t]/gu, '')), '段落只能包含换行、回车和制表控制字符。');
+const text = verificationTextSchema;
 const hash = z.string().regex(/^[a-f\d]{64}$/iu);
 const finite = z.number().finite();
 export const VERIFICATION_PAGE_SIZE = 20;
@@ -13,17 +21,19 @@ export const metricSchema = z.enum([
   'critical_relation_error', 'critical_direction_error', 'critical_position_error', 'reference_quadrature_error', 'propagation_completion',
 ]);
 export const conclusionSchema = z.enum(['not_run', 'passed', 'failed', 'missing_artifact', 'not_applicable', 'inconclusive']);
+const validThreshold = (check: { metricId: string; threshold: number }) => check.metricId !== 'propagation_completion' || check.threshold === PROPAGATION_COMPLETION_THRESHOLD;
 export const verificationRuleCheckSchema = z.strictObject({
-  metricId: metricSchema, title: text, threshold: finite.nonnegative(), unit: text, basis: text, applicability: text, evidenceScope: text,
-});
+  metricId: metricSchema, title: text, threshold: finite.nonnegative(), unit: text, basis: verificationParagraphSchema, applicability: text, evidenceScope: text,
+}).refine(validThreshold, '传播终止条件阈值必须为零。');
 export const verificationRuleSchema = z.strictObject({
   id: text, projectId: text, ruleFamilyId: text, parentVersionId: text.nullable(), title: text, createdAt: text,
-  createdBy: text, methodId: text, methodVersion: z.number().int().positive(), changeReason: text, builtin: z.boolean(),
+  createdBy: text, methodId: text, methodVersion: z.number().int().positive(), changeReason: verificationParagraphSchema, builtin: z.boolean(),
   checks: z.array(verificationRuleCheckSchema).min(1), contentHash: hash,
 }).refine((rule) => new Set(rule.checks.map((check) => check.metricId)).size === rule.checks.length, '规则指标不得重复。');
 export const verificationDraftSchema = z.strictObject({
-  baseVersionId: text, title: text, changeReason: text,
-  thresholds: z.array(z.strictObject({ metricId: metricSchema, threshold: finite.nonnegative(), basis: text })).min(1),
+  baseVersionId: text, title: text, changeReason: verificationParagraphSchema,
+  thresholds: z.array(z.strictObject({ metricId: metricSchema, threshold: finite.nonnegative(), basis: verificationParagraphSchema })
+    .refine(validThreshold, '传播终止条件阈值必须为零。')).min(1),
 }).refine((draft) => new Set(draft.thresholds.map((check) => check.metricId)).size === draft.thresholds.length, '规则指标不得重复。');
 export const verificationSourceSchema = z.strictObject({
   requestHash: hash, environmentHash: hash, resultHash: hash.nullable(), hashFormat: text,
@@ -31,9 +41,10 @@ export const verificationSourceSchema = z.strictObject({
 }).refine((source) => (source.resultHash === null) === (source.resultOrigin === 'no_result'), '产物身份与来源必须一致。');
 export const verificationCheckSchema = z.strictObject({
   metricId: metricSchema, trajectoryIndex: z.number().int().nonnegative().nullable(), impactParameter: finite.nullable(),
-  title: text, actual: finite.nullable(), threshold: finite.nonnegative(), unit: text, basis: text,
+  title: text, actual: finite.nonnegative().nullable(), threshold: finite.nonnegative(), unit: text, basis: verificationParagraphSchema,
   conclusion: conclusionSchema, reasonCode: text, message: text, evidenceScope: text, evidencePaths: z.array(text),
-}).refine((check) => check.conclusion !== 'passed' || (check.actual !== null && check.actual <= check.threshold && check.evidencePaths.length > 0),
+}).refine(validThreshold, '传播终止条件阈值必须为零。')
+  .refine((check) => check.conclusion !== 'passed' || (check.actual !== null && check.actual <= check.threshold && check.evidencePaths.length > 0),
   '通过必须有实际值、完整依据路径且不超过阈值。');
 export const verificationRecordSchema = z.strictObject({
   id: text, projectId: text, requestId: text, clientRequestId: text, runId: text, ruleVersionId: text,

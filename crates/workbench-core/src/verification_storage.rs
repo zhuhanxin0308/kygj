@@ -200,7 +200,11 @@ impl ProjectStore {
             execution_status:VerificationExecutionStatus::Completed,conclusion:aggregate(&checks),source:saved.source,checks,error:None,content_hash:String::new()};
         record.content_hash=record_hash(&record)?;
         let transaction=connection.transaction_with_behavior(TransactionBehavior::Immediate).map_err(|_|schema::database_error())?;
-        if source_identity(&transaction,&run)?!=record.source {return Err(CoreError::new("verification_source_changed","验证期间产物身份发生变化，未登记完成"));}
+        // 请求提交后必须重新读取受当前事务保护的产物；缓存run不能证明源内容未变化。
+        let current_json:String=transaction.query_row("SELECT record_json FROM runs WHERE id=?1",[&record.run_id],|row|row.get(0)).map_err(|_|corrupt())?;
+        let current_run:RunRecord=decode(&current_json)?;
+        crate::storage::validate_run_record(&transaction,&current_run,&record.project_id)?;
+        if current_run.id!=record.run_id || source_identity(&transaction,&current_run)?!=record.source {return Err(CoreError::new("verification_source_changed","验证期间产物身份发生变化，未登记完成"));}
         append_record(&transaction,&record)?; transaction.commit().map_err(|_|schema::database_error())?; Ok(record)
     }
 }

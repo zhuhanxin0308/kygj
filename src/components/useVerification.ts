@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { formatError, type DesktopClient } from '../services/desktop';
-import { verificationDraftSchema, VERIFICATION_PAGE_SIZE, type VerificationRecord, type VerificationRuleDraft, type VerificationRuleVersion, type RunVerificationState } from '../domain/verification';
+import { verificationDraftSchema, VERIFICATION_PAGE_SIZE, type VerificationExecution, type VerificationRecord, type VerificationRuleDraft, type VerificationRuleVersion, type RunVerificationState } from '../domain/verification';
 
 // 项目/运行和规则选择各有代数守卫，迟到请求不串入新工作区；历史只追加。
 export function useVerification(client: DesktopClient, projectId: string | null, runId: string | null) {
@@ -15,17 +15,19 @@ export function useVerification(client: DesktopClient, projectId: string | null,
   const [ruleNext, setRuleNext] = useState<number | null>(null);
   const [recordNext, setRecordNext] = useState<number | null>(null);
   const [recordTotal, setRecordTotal] = useState(0);
+  const [retryRequests, setRetryRequests] = useState<Record<string, VerificationExecution>>({});
   const epoch = useRef(0);
   const selection = useRef(0);
   const lock = useRef(false);
   const selectedRule = rules.find((rule) => rule.id === ruleId) ?? null;
+  const retryRequest = ruleId ? retryRequests[ruleId] ?? null : null;
   const scope = useRef({ projectId, runId, ruleId });
   scope.current = { projectId, runId, ruleId };
 
   useEffect(() => {
     const token = ++epoch.current;
     lock.current = false; setBusy(false); setError(null); setRules([]); setRuleId(null); setRecords([]);
-    setState(null); setDetail(null); setRuleNext(null); setRecordNext(null); setRecordTotal(0);
+    setState(null); setDetail(null); setRuleNext(null); setRecordNext(null); setRecordTotal(0); setRetryRequests({});
     if (!projectId) { setLoading(false); return; }
     setLoading(true);
     void Promise.all([
@@ -60,7 +62,19 @@ export function useVerification(client: DesktopClient, projectId: string | null,
     finally { if (valid()) { lock.current = false; setBusy(false); } }
   }
   async function refresh(valid: () => boolean) {
-    if (!projectId || !runId || !ruleId) return;
+    if (!projectId) return;
+    // 首次目录加载失败时必须能够重新读取规则；成功后由选择效应读取对应状态。
+    if (!ruleId) {
+      const [rulePage, recordPage] = await Promise.all([
+        client.listVerificationRules(projectId, 0, VERIFICATION_PAGE_SIZE),
+        runId ? client.listVerificationRecords(projectId, runId, 0, VERIFICATION_PAGE_SIZE) : Promise.resolve(null),
+      ]);
+      if (!valid()) return;
+      setRules(rulePage.rules); setRuleNext(rulePage.nextOffset); setRuleId(rulePage.rules[0]?.id ?? null);
+      if (recordPage) { setRecords(recordPage.records); setRecordNext(recordPage.nextOffset); setRecordTotal(recordPage.total); }
+      return;
+    }
+    if (!runId) return;
     const [nextState, page] = await Promise.all([
       client.getRunVerificationState(projectId, runId, ruleId), client.listVerificationRecords(projectId, runId, 0, VERIFICATION_PAGE_SIZE),
     ]);
@@ -69,7 +83,7 @@ export function useVerification(client: DesktopClient, projectId: string | null,
     setRecords(page.records); setRecordNext(page.nextOffset); setRecordTotal(page.total);
   }
   return {
-    rules, selectedRule, records, state, detail, error, loading, busy, ruleNext, recordNext, recordTotal,
+    rules, selectedRule, records, state, detail, error, loading, busy, ruleNext, recordNext, recordTotal, retryRequest,
     selectRule: (id: string) => { if (rules.some((rule) => rule.id === id)) setRuleId(id); },
     closeDetail: () => setDetail(null),
     refresh: () => perform(refresh),
@@ -93,11 +107,22 @@ export function useVerification(client: DesktopClient, projectId: string | null,
       if (valid()) { setRules((previous) => [...previous, rule]); setRuleId(rule.id); }
     }),
     execute: () => perform(async (valid) => {
-      if (!runId || !ruleId || !state || state.pendingRequestId) throw { code: 'verification_not_ready', message: '请等待规则状态读取完成，或先刷新正在进行的独立检查。' };
-      const record = await client.executeVerification(projectId!, { runId, ruleVersionId: ruleId, clientRequestId: crypto.randomUUID(), previousRecordId: state.latestRecord?.id ?? null });
+      if (!runId || !ruleId || (!retryRequest && (!state || state.pendingRequestId))) throw { code: 'verification_not_ready', message: '请等待规则状态读取完成，或先刷新正在进行的独立检查。' };
+      // 回复未确认前保留整个请求，手动重试复用幂等身份和前序记录，切换规则也不能丢失它。
+      const request = retryRequest ?? { runId, ruleVersionId: ruleId, clientRequestId: crypto.randomUUID(), previousRecordId: state?.latestRecord?.id ?? null };
+      setRetryRequests((previous) => ({ ...previous, [ruleId]: request }));
+      const record = await client.executeVerification(projectId!, request);
       if (!valid()) return;
+      setRetryRequests((previous) => {
+        const remaining = { ...previous };
+        delete remaining[ruleId];
+        return remaining;
+      });
       // 返回值是真实持久化记录；失败结论同样保留，不以调用成功决定绿色状态。
       setDetail(record);
+      setRecords((previous) => previous.some((item) => item.id === record.id) ? previous : [...previous, record]);
+      // 已提交的前序关系必须重新读取，刷新失败时禁止沿用旧状态创建下一次检查。
+      if (scope.current.ruleId === ruleId) setState(null);
       await refresh(valid);
       if (valid()) setRecords((previous) => previous.some((item) => item.id === record.id) ? previous : [...previous, record]);
     }),

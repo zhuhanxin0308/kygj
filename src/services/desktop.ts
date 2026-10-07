@@ -65,8 +65,11 @@ export function createDesktopClient(transport: Invoke, available: () => boolean)
   }
   const rejectIdentity = () => { throw { code: 'invalid_response', message: '独立验证的项目、运行、规则、分页或请求来源不符，本次回复未被接受。' }; };
   const pagination = (offset: number, limit: number) => z.strictObject({ offset: z.number().int().nonnegative(), limit: z.number().int().min(1).max(VERIFICATION_PAGE_LIMIT) }).parse({ offset, limit });
-  const validPage = (offset: number, limit: number, size: number, total: number, nextOffset: number | null) =>
-    size <= limit && total >= size && (nextOffset === null || (nextOffset === offset + size && nextOffset > offset && nextOffset < total));
+  // 剩余记录与下一页游标必须互相印证，防止提前结束或接受超出总数的历史。
+  const validPage = (offset: number, limit: number, size: number, total: number, nextOffset: number | null) => {
+    const end = offset + size;
+    return size <= limit && end <= total && (end === total ? nextOffset === null : size > 0 && nextOffset === end);
+  };
   return {
     available,
     createProject: (parentDirectory, name) => call('create_project', { parentDirectory, name }, projectStateSchema),
@@ -88,9 +91,9 @@ export function createDesktopClient(transport: Invoke, available: () => boolean)
     saveVerificationRuleVersion: async (projectId, draft) => {
       const rule = await call('save_verification_rule_version', { projectId, draft: verificationDraftSchema.parse(draft) }, verificationRuleSchema);
       if (rule.parentVersionId !== draft.baseVersionId || rule.builtin || rule.id === draft.baseVersionId
-        || rule.title !== draft.title.trim() || rule.changeReason !== draft.changeReason.trim()
+        || rule.title !== draft.title || rule.changeReason !== draft.changeReason
         || rule.checks.length !== draft.thresholds.length || !draft.thresholds.every((value) => rule.checks.some((check) =>
-          check.metricId === value.metricId && check.threshold === value.threshold && check.basis === value.basis.trim()))) rejectIdentity();
+          check.metricId === value.metricId && check.threshold === value.threshold && check.basis === value.basis))) rejectIdentity();
       return rule;
     },
     getRunVerificationState: async (projectId, runId, ruleVersionId) => {

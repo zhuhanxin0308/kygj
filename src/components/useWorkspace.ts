@@ -2,7 +2,7 @@ import { useEffect, useReducer, useRef, useState } from 'react';
 import { configSchema, configsEqual, validateProjectName } from '../domain/model';
 import { initialSession, isActiveRun, sessionReducer } from '../domain/session';
 import { desktopClient, fileDialogs, formatError, type DesktopClient, type FileDialogs } from '../services/desktop';
-import type { ProjectMigrationPlan } from '../domain/verification';
+import type { ProjectMigrationPlan, ProjectMigrationReceipt } from '../domain/verification';
 
 export const POLL_INTERVAL_MS = 1000;
 // 操作锁阻止重复提交，代数标识阻止旧项目请求在切换后覆盖当前界面。
@@ -12,6 +12,7 @@ export function useWorkspace(client: DesktopClient = desktopClient, dialogs: Fil
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [migrationPlan, setMigrationPlan] = useState<ProjectMigrationPlan | null>(null);
+  const [migrationReceipt, setMigrationReceipt] = useState<ProjectMigrationReceipt | null>(null);
   const operationLock = useRef(false);
   const generation = useRef(0);
   const alive = useRef(true);
@@ -34,6 +35,16 @@ export function useWorkspace(client: DesktopClient = desktopClient, dialogs: Fil
   const selectedRun = state.project?.runs.find((run) => run.id === state.selectedRunId) ?? null;
   const selectedModel = state.project?.models.find((model) => model.id === state.selectedModelId) ?? null;
   const dirty = !selectedModel || !configsEqual(selectedModel.config, state.draft);
+
+  // 迁移已经提交后，读取失败只能重试打开；回执保存备份身份，不回到迁移确认阶段。
+  async function openMigratedProject(receipt: ProjectMigrationReceipt) {
+    const project = await client.openProject(receipt.directory);
+    if (project.project.id !== receipt.projectId) throw { code: 'invalid_response', message: '迁移后读取的项目身份不一致，项目未载入。' };
+    if (!alive.current) return;
+    generation.current += 1;
+    dispatch({ type: 'projectLoaded', project }); setMigrationReceipt(null);
+    setNotice(`项目已按确认计划迁移；可恢复备份：${receipt.backupPath} · SHA-256 ${receipt.backupSha256}`);
+  }
 
   // 轮询不重叠；未知状态保留人工核实入口，不自动重提运行。
   useEffect(() => {
@@ -60,7 +71,7 @@ export function useWorkspace(client: DesktopClient = desktopClient, dialogs: Fil
   }, [client, state.project?.project.id, state.project?.runs.map((run) => `${run.id}:${run.state}`).join('|')]);
 
   return {
-    state, dispatch, busy, error, notice, selectedRun, selectedModel, dirty, migrationPlan,
+    state, dispatch, busy, error, notice, selectedRun, selectedModel, dirty, migrationPlan, migrationReceipt,
     clearError: () => setError(null),
     createProject: (name: string) => perform(async () => {
       const invalid = validateProjectName(name);
@@ -69,14 +80,14 @@ export function useWorkspace(client: DesktopClient = desktopClient, dialogs: Fil
       if (!directory) return;
       const project = await client.createProject(directory, name);
       generation.current += 1;
-      setMigrationPlan(null);
+      setMigrationPlan(null); setMigrationReceipt(null);
       dispatch({ type: 'projectLoaded', project });
       setNotice('项目已创建，研究数据保存在所选本地目录。');
     }),
     openProject: () => perform(async () => {
       const directory = await dialogs.directory();
       if (!directory) return;
-      setMigrationPlan(null);
+      setMigrationPlan(null); setMigrationReceipt(null);
       try {
         const project = await client.openProject(directory);
         generation.current += 1;
@@ -87,20 +98,21 @@ export function useWorkspace(client: DesktopClient = desktopClient, dialogs: Fil
         setMigrationPlan(await client.prepareProjectMigration(directory));
       }
     }),
-    cancelMigration: () => { if (!operationLock.current) setMigrationPlan(null); },
+    cancelMigration: () => { if (!operationLock.current) { setMigrationPlan(null); setMigrationReceipt(null); } },
     refreshMigration: () => perform(async () => {
       if (migrationPlan) setMigrationPlan(await client.prepareProjectMigration(migrationPlan.directory));
     }),
     confirmMigration: () => perform(async () => {
       if (!migrationPlan) throw { code: 'migration_plan_required', message: '请先预览旧项目的迁移计划。' };
       const receipt = await client.applyProjectMigration(migrationPlan.directory, migrationPlan.id);
-      if (receipt.projectId !== migrationPlan.projectId || receipt.directory !== migrationPlan.directory
+      if (receipt.planId !== migrationPlan.id || receipt.projectId !== migrationPlan.projectId || receipt.directory !== migrationPlan.directory
         || receipt.backupPath !== migrationPlan.backupPath) throw { code: 'invalid_response', message: '迁移回执与已审阅计划身份不一致，项目未载入。' };
-      const project = await client.openProject(receipt.directory);
-      if (project.project.id !== receipt.projectId) throw { code: 'invalid_response', message: '迁移后读取的项目身份不一致，项目未载入。' };
-      generation.current += 1;
-      dispatch({ type: 'projectLoaded', project }); setMigrationPlan(null);
-      setNotice(`项目已按确认计划迁移；可恢复备份：${receipt.backupPath} · SHA-256 ${receipt.backupSha256}`);
+      setMigrationReceipt(receipt); setMigrationPlan(null);
+      await openMigratedProject(receipt);
+    }),
+    retryMigratedProject: () => perform(async () => {
+      if (!migrationReceipt) throw { code: 'migration_receipt_required', message: '没有需要重新打开的已迁移项目。' };
+      await openMigratedProject(migrationReceipt);
     }),
     saveModel: (label: string) => perform(async () => {
       const projectId = requireProject();

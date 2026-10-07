@@ -25,6 +25,38 @@ const dialogs: FileDialogs = { directory: async () => 'C:/Research', python: asy
 // 工作区包含完整主题和模态层，使用独立的交互测试时限，不改变产品或科学预算。
 const WORKBENCH_TEST_TIMEOUT_MS = 20000;
 describe('工作区失败与可访问行为', () => {
+  it('资源栏和检查器可独立收起，恢复后草稿与冻结运行保持原样', async () => {
+    const client = makeClient();
+    render(<Workbench client={client} dialogs={dialogs} />);
+    fireEvent.click(screen.getByRole('button', { name: /打开项目/ }));
+    await screen.findByText(model.label);
+    fireEvent.change(screen.getByLabelText('喉尺度 a'), { target: { value: '2' } });
+    fireEvent.click(screen.getByRole('button', { name: '收起项目资源' }));
+    expect(screen.getByRole('button', { name: '展开项目资源' })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('complementary', { name: '项目资源' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('scene')).toHaveAttribute('data-throat', '1');
+    fireEvent.click(screen.getByRole('button', { name: '展开项目资源' }));
+    expect(screen.getByRole('complementary', { name: '项目资源' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '收起检查器' }));
+    expect(screen.queryByRole('complementary', { name: '上下文检查器' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '展开检查器' }));
+    expect(screen.getByLabelText('喉尺度 a')).toHaveValue('2');
+    expect(client.startRun).not.toHaveBeenCalled();
+  }, 60000);
+  it('继续研究只列真实运行并保留执行、检查和复核的独立状态', async () => {
+    const client = makeClient();
+    render(<Workbench client={client} dialogs={dialogs} />);
+    expect(screen.getByText('暂无可继续的运行！')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /打开项目/ }));
+    await screen.findByText(model.label);
+    const recent = screen.getByRole('region', { name: '继续研究' });
+    expect(within(recent).getByRole('button', { name: `继续研究 ${run.id}` })).toBeInTheDocument();
+    expect(within(recent).getByText('执行完成')).toBeInTheDocument();
+    expect(within(recent).getByText('检查通过')).toBeInTheDocument();
+    fireEvent.click(within(recent).getByRole('button', { name: `继续研究 ${run.id}` }));
+    expect(screen.getByTestId('scene')).toHaveAttribute('data-result', 'true');
+    expect(client.startRun).not.toHaveBeenCalled();
+  }, 60000);
   it('无宿主时明确说明不可运行，没有虚构轨迹或进度', () => {
     render(<Workbench />);
     expect(screen.getByText(/浏览器预览未连接桌面宿主/)).toBeInTheDocument();

@@ -19,15 +19,13 @@ import { EnvironmentDetails, RecordInspector } from './RecordInspector';
 import { useWorkspace } from './useWorkspace';
 import { VerificationPanel } from './VerificationPanel';
 import { MigrationPreview } from './MigrationPreview';
+import { WORKBENCH_THEME, DESIGN_CSS_VARIABLES } from '../design/system';
+import { GravityMark } from '../design/GravityMark';
 
 // 大型可视化依赖独立加载，项目表单和宿主操作无需等待其解析完成。
 const ResearchScene = lazy(() => import('../visualization/ResearchScene').then((module) => ({ default: module.ResearchScene })));
 const AnalysisChart = lazy(() => import('../visualization/AnalysisChart').then((module) => ({ default: module.AnalysisChart })));
 
-const THEME = {
-  algorithm: theme.darkAlgorithm,
-  token: { colorPrimary: '#3EDCFF', colorInfo: '#3EDCFF', colorSuccess: '#36D6B0', colorWarning: '#FFB65C', colorError: '#FF6B7A', colorBgBase: '#090E17', colorBgContainer: '#111A29', colorBgElevated: '#17243A', colorText: '#EDF4FF', colorTextSecondary: '#A6B7CF', colorBorder: '#263a51', borderRadius: 6, fontFamily: 'Inter, Segoe UI, Microsoft YaHei, sans-serif', fontSize: 13, controlHeight: 32 },
-};
 interface Props { client?: DesktopClient; dialogs?: FileDialogs }
 
 // 顶层只装配真实项目操作和视图；未实现领域能力保留固定导航并明确禁用。
@@ -106,10 +104,10 @@ export function Workbench({ client = desktopClient, dialogs = fileDialogs }: Pro
     { label: '环境', icon: <ApiOutlined />, action: () => setInspector('environment'), disabled: false },
     { label: '交付：导出运行记录', short: '交付', icon: <ExportOutlined />, action: () => void workspace.exportRun(), disabled: !selectedRun || busy },
   ];
-  return <ConfigProvider theme={THEME} locale={zhCN}>
-    <div className="workbench">
+  return <ConfigProvider theme={WORKBENCH_THEME} locale={zhCN}>
+    <div className="workbench" style={DESIGN_CSS_VARIABLES}>
       <header className="topbar">
-        <div className="brand"><span className="brand-mark">Λ</span><strong>引力科研工作台</strong></div>
+        <div className="brand"><GravityMark /><strong>引力科研工作台</strong></div>
         <span className="workspace-name">{state.project?.project.name ?? '本地研究工作区'}</span>
         <Button className="command-trigger" icon={<SearchOutlined />} onClick={() => setCommandOpen(true)}><span>搜索或执行命令</span><kbd>Ctrl K</kbd></Button>
         <span className="host-status"><span className={`live-dot ${available ? '' : 'muted'}`} />{available ? '本地桌面' : '浏览器预览'}</span>

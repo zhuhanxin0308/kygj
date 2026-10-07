@@ -1,6 +1,6 @@
-import { cleanup, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
-import { VerificationRecordDetails, VerificationRuleDetails } from './VerificationDetails';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { VerificationRecordDetails, VerificationRuleDetails, VerificationRuleEditor } from './VerificationDetails';
 import { verificationRecord, verificationRule } from '../test/verificationFixtures';
 
 // 缺产物与迁移所见来源必须明确显示，不能被“检查已完成”替代。
@@ -22,5 +22,16 @@ describe('验证证据详情', () => {
     expect(screen.getByText('迁移时所见内容；不能证明历史未被修改')).toBeInTheDocument();
     expect(screen.getByText('研究者派生版本')).toBeInTheDocument();
     expect(screen.getByText('parent-rule')).toBeInTheDocument();
+  });
+  it('传播终止条件编辑锁定零阈值，带控制符的依据不能提交', async () => {
+    const onSave = vi.fn().mockResolvedValue(true);
+    const rule = { ...verificationRule, checks: [{ ...verificationRule.checks[0], metricId: 'propagation_completion' as const, title: '传播终止条件', threshold: 0 }] };
+    render(<VerificationRuleEditor rule={rule} busy={false} onSave={onSave} onClose={vi.fn()} />);
+    expect(screen.getByRole('spinbutton', { name: '传播终止条件阈值' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('变更理由'), { target: { value: '研究条件更新' } });
+    fireEvent.change(screen.getByLabelText('传播终止条件依据'), { target: { value: '依据\u0085损坏' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存为新规则版本' }));
+    await waitFor(() => expect(screen.getByText('段落只能包含换行、回车和制表控制字符。')).toBeInTheDocument());
+    expect(onSave).not.toHaveBeenCalled();
   });
 });

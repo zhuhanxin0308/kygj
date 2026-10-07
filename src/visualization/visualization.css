@@ -1,0 +1,24 @@
+/* 自绘科研图形使用全局令牌，控件继续由 Ant Design 提供样式与键盘语义。 */
+.analysis-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.analysis-grid.analysis-detail { grid-template-columns: minmax(0, 1.6fr) repeat(3, minmax(0, 1fr)); }
+.analysis-cell { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 8px 3px 0; }
+.analysis-cell + .analysis-cell { border-left: 1px solid var(--color-border); }
+.analysis-cell-heading { display: flex; gap: 8px; align-items: center; padding: 0 10px 6px; font-size: 12px; color: var(--color-text); }
+.analysis-formula { margin-left: auto; color: var(--color-muted); white-space: nowrap; font-family: var(--font-equation); }
+.analysis-cell .chart-canvas { flex: 1; min-height: 0; }
+.analysis-detail .analysis-cell-heading { flex-wrap: wrap; gap: 2px; }
+.analysis-detail .analysis-formula { margin-left: 0; width: 100%; }
+.scene-tools { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
+.scene-panel > .panel-heading { height: auto; min-height: 44px; padding-block: 4px; }
+.scene-tools .ant-btn { width: 29px; height: 29px; }
+.scene-panel .scene-caption { max-width: calc(100% - 32px); color: var(--color-muted); font-size: 11px; }
+.scene-panel .scene-coordinate { bottom: 12px; font-size: 11px; color: var(--color-muted); }
+.scene-panel .scene-coordinate span { color: var(--color-muted); opacity: .75; }
+.scene-layer-list { min-width: 184px; max-height: 360px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.scene-layer-section { color: var(--color-muted); font-size: 11px; border-top: 1px solid var(--color-border); padding-top: 8px; }
+.scene-ray-layer { display: flex; align-items: center; gap: 8px; }
+.scene-ray-layer i { display: inline-block; width: 15px; height: 3px; border-radius: 2px; margin-right: 8px; }
+.scene-ray-layer.is-selected { color: var(--color-primary); }
+.scene-scale-note { position: absolute; left: 14px; bottom: 10px; pointer-events: none; font-size: 10px; color: var(--color-muted); }
+.scene-canvas[data-tool="pan"] { cursor: grab; }
+.scene-canvas[data-tool="pick"] { cursor: crosshair; }

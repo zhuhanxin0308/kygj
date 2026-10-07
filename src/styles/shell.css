@@ -1,0 +1,37 @@
+/* v3布局和组件共用design/system.ts注入的令牌，避免并行维护多套色板。 */
+:root { color-scheme: dark; font-synthesis: none; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+button, input { font: inherit; }
+.workbench { --resource-size: var(--layout-resource); --inspector-size: var(--layout-inspector); height: 100dvh; min-height: 0; display: flex; flex-direction: column; overflow: hidden; color: var(--color-text); font-family: var(--font-body); background: var(--color-background); }
+button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.topbar { height: var(--layout-topbar); flex-shrink: 0; display: flex; align-items: center; gap: 16px; padding: 0 16px; border-bottom: 1px solid var(--color-border); background: color-mix(in srgb, var(--color-surface) 50%, var(--color-background)); }
+.brand { display: flex; align-items: center; gap: 16px; font-size: 18px; white-space: nowrap; }
+.brand-mark { width: 32px; height: 32px; flex-shrink: 0; filter: drop-shadow(0 0 8px color-mix(in srgb, var(--color-primary) 20%, transparent)); }
+.workspace-name { color: var(--color-text); padding-left: 16px; border-left: 1px solid var(--color-border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.command-trigger { width: min(408px, 30vw); margin-left: auto; justify-content: flex-start; color: var(--color-muted); }
+.command-trigger kbd { margin-left: auto; color: var(--color-muted); font-size: 12px; }
+.host-status, .live-dot { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.host-status { font-size: 12px; }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--color-success); flex-shrink: 0; }
+.live-dot.muted { background: var(--color-muted); }
+.workspace-body { flex: 1; min-height: 0; display: grid; grid-template-columns: var(--layout-navigation) var(--resource-size) minmax(0, 1fr) var(--inspector-size); gap: var(--layout-gap); padding: 8px 8px 8px 0; }
+.workspace-body.resources-collapsed { grid-template-columns: var(--layout-navigation) minmax(0, 1fr) var(--inspector-size); }
+.workspace-body.inspector-collapsed { grid-template-columns: var(--layout-navigation) var(--resource-size) minmax(0, 1fr); }
+.workspace-body.resources-collapsed.inspector-collapsed { grid-template-columns: var(--layout-navigation) minmax(0, 1fr); }
+.resource-panel[hidden], .inspector-stack[hidden] { display: none; }
+.primary-nav { display: flex; flex-direction: column; align-items: stretch; border-right: 1px solid var(--color-border); gap: 8px; }
+.nav-entry { display: flex; flex-direction: column; align-items: center; padding: 8px 0; font-size: 12px; color: var(--color-muted); border-left: 2px solid transparent; border-radius: var(--layout-radius); transition: color var(--motion-selection), background var(--motion-selection), border-color var(--motion-selection); }
+.nav-entry .ant-btn { width: 40px; height: 32px; font-size: 22px; }
+.nav-entry:has(button:disabled) { opacity: .5; }
+.nav-entry.is-active { color: var(--color-primary); border-left-color: var(--color-primary); background: linear-gradient(90deg, color-mix(in srgb, var(--color-primary) 12%, transparent), transparent); }
+.nav-entry.is-active .ant-btn { color: var(--color-primary); }
+.nav-bottom { margin-top: auto; padding: 16px 0; text-align: center; color: var(--color-muted); font-size: 10px; line-height: 1.6; }
+.statusbar { display: flex; align-items: center; gap: 24px; height: var(--layout-status); flex-shrink: 0; padding: 0 16px; font-size: 12px; color: var(--color-muted); background: var(--color-surface); border-top: 1px solid var(--color-border); }
+.statusbar > span { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.statusbar b { color: var(--color-primary); font-weight: 400; }
+.status-end { margin-left: auto; }
+.semantic-tag { border-radius: var(--layout-radius); }
+@media (max-width: 1280px) { .workbench { --resource-size: 200px; --inspector-size: 280px; } .workspace-name, .subtle { display: none; } .topbar { gap: 8px; } .statusbar { gap: 16px; } }
+/* 减少动态效果不隐藏信息；显式轨迹播放仍可暂停和逐帧操作。 */
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }

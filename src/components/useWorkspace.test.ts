@@ -71,6 +71,32 @@ describe('真实工作区操作编排', () => {
     expect(client.applyProjectMigration).toHaveBeenCalledTimes(1);
     expect(client.openProject).toHaveBeenLastCalledWith(migrationPlan.directory);
     expect(result.current.state.project?.project.id).toBe(migrationPlan.projectId);
+    expect(result.current.migrationReceipt).toBeNull();
+    expect(result.current.notice).toContain('f'.repeat(64));
+  });
+  it('迁移回执保留期间拒绝再次确认，身份错误和再次读取失败均不覆盖当前项目', async () => {
+    const client = makeClient();
+    const { result } = renderHook(() => useWorkspace(client, makeDialogs()));
+    await act(() => result.current.openProject());
+    client.openProject.mockRejectedValueOnce({ code: 'migration_required', message: '需要迁移' });
+    await act(() => result.current.openProject());
+    const receipt = { planId: migrationPlan.id, directory: migrationPlan.directory, projectId: migrationPlan.projectId, fromVersion: 1, toVersion: 2, backupPath: migrationPlan.backupPath, backupSha256: 'f'.repeat(64), migratedAt: model.createdAt, legacyResultCount: 1 };
+    client.applyProjectMigration.mockResolvedValue(receipt);
+    client.openProject.mockResolvedValueOnce({ ...project, project: { ...project.project, id: 'wrong-project' } });
+    await act(() => result.current.confirmMigration());
+    expect(result.current.error).toContain('身份不一致');
+    expect(result.current.state.project).toEqual(project);
+    expect(result.current.migrationReceipt).toEqual(receipt);
+    await act(() => result.current.confirmMigration());
+    expect(client.applyProjectMigration).toHaveBeenCalledTimes(1);
+    client.openProject.mockRejectedValueOnce({ code: 'read_failed', message: '再次读取失败' });
+    await act(() => result.current.retryMigratedProject());
+    expect(result.current.migrationReceipt).toEqual(receipt);
+    expect(result.current.error).toBe('再次读取失败');
+    act(() => result.current.cancelMigration());
+    expect(result.current.migrationReceipt).toBeNull();
+    await act(() => result.current.retryMigratedProject());
+    expect(result.current.error).toContain('没有需要重新打开');
   });
   it('创建项目、保存版本、探测、预检、提交、查询与导出闭环', async () => {
     const client = makeClient();

@@ -1,5 +1,5 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PerspectiveCamera, OrthographicCamera } from 'three';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import type { ReactNode } from 'react';
@@ -25,6 +25,8 @@ vi.mock('@react-three/drei', async () => {
   const { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } = await import('react');
   const { OrbitControls: ActualOrbitControls } = await import('three-stdlib');
   return {
+    GizmoHelper: ({ children }: { children: ReactNode }) => <div data-testid="orientation-widget">{children}</div>,
+    GizmoViewport: () => <span>场景方向 X Y Z</span>,
     // 保留真实控制器及原生滚轮监听，仅以 DOM 元素替代 WebGL 画布。
     OrbitControls: forwardRef<OrbitControlsImpl, { enableDamping: boolean }>(({ enableDamping }, ref) => {
       const controls = useMemo(() => new ActualOrbitControls(hooks.camera as PerspectiveCamera | OrthographicCamera), [hooks.camera]);
@@ -40,6 +42,10 @@ vi.mock('@react-three/drei', async () => {
     }),
     Line: ({ onClick, points }: { onClick(event: { stopPropagation(): void }): void; points: unknown[] }) => <button aria-label="选中三维轨迹" data-points={points.length} onClick={onClick}>轨迹</button>,
   };
+});
+beforeEach(() => {
+  // 场景交互回归使用减少动态效果偏好；真实360毫秒过程在相机专测中逐帧验证。
+  vi.mocked(window.matchMedia).mockImplementation((query) => ({ matches: query === '(prefers-reduced-motion: reduce)', media: query, onchange: null, addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn() }));
 });
 afterEach(() => { cleanup(); hooks.fail = false; hooks.size = { height: 600, width: 800 }; });
 describe('三维场景与可访问操作', () => {
@@ -61,7 +67,7 @@ describe('三维场景与可访问操作', () => {
     expect(screen.getByRole('button', { name: '曲面剖切' })).toHaveAttribute('aria-pressed', 'true');
     fireEvent.click(screen.getByRole('button', { name: '切换投影' }));
     expect(screen.getByTestId('canvas')).toHaveAttribute('data-projection', 'true');
-    expect((hooks.camera as PerspectiveCamera).zoom).toBeCloseTo(600 / (2 * Math.hypot(1, 0.1) * 1.4));
+    expect((hooks.camera as PerspectiveCamera).zoom).toBeCloseTo(600 / (2 * Math.hypot(Math.asinh(10) / 10, Math.hypot(1, 0.1)) * 1.4));
     fireEvent.click(screen.getByRole('button', { name: '复位视角' }));
     expect(screen.getByText(/显示真实运行轨迹/)).toBeInTheDocument();
   }, INTERACTION_TEST_TIMEOUT_MS);
@@ -143,6 +149,50 @@ describe('三维场景与可访问操作', () => {
     view.rerender(<ResearchScene {...props} config={null} />);
     expect(screen.getByText('参数无效，已暂停几何预览。')).toBeInTheDocument();
   });
+  it('点击与键盘均可打开图层，逐光线显隐只影响显示', () => {
+    hooks.camera = new PerspectiveCamera();
+    render(<ResearchScene config={model.config} result={result} selected={0} affine={20} onSelect={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: '场景图层' }));
+    expect(screen.getByRole('checkbox', { name: '坐标轴' })).toBeChecked();
+    expect(screen.getByTestId('orientation-widget')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: '坐标轴' }));
+    expect(screen.queryByTestId('orientation-widget')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: '嵌入曲面' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: '参考网格' }));
+    expect(screen.getByRole('checkbox', { name: '嵌入曲面' })).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: '参考网格' })).not.toBeChecked();
+    fireEvent.click(screen.getByRole('checkbox', { name: '光线 b = 0' }));
+    expect(screen.queryByRole('button', { name: '选中三维轨迹' })).not.toBeInTheDocument();
+    expect(result.trajectories[0].samples).toHaveLength(2);
+    fireEvent.keyDown(screen.getByRole('region'), { key: 'Escape' });
+    fireEvent.keyDown(screen.getByRole('region'), { key: 'l' });
+    fireEvent.click(screen.getByRole('checkbox', { name: '光线 b = 0' }));
+    expect(screen.getByRole('button', { name: '选中三维轨迹' })).toBeInTheDocument();
+  }, INTERACTION_TEST_TIMEOUT_MS);
+  it('工具栏切换旋转、平移和拾取并保留明确的嵌入比例说明', () => {
+    hooks.camera = new PerspectiveCamera();
+    render(<ResearchScene config={model.config} result={null} selected={0} affine={0} onSelect={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: '拖动平移' }));
+    expect(screen.getByRole('region')).toHaveAttribute('data-tool', 'pan');
+    fireEvent.click(screen.getByRole('button', { name: '拾取光线' }));
+    expect(screen.getByRole('region')).toHaveAttribute('data-tool', 'pick');
+    fireEvent.click(screen.getByRole('button', { name: '旋转视角' }));
+    expect(screen.getByRole('region')).toHaveAttribute('data-tool', 'rotate');
+    expect(screen.getByText('真实嵌入比例 · X 为嵌入轴')).toBeInTheDocument();
+  });
+  it('从视场快捷键进入图层后可直接操作复选框，Escape关闭并归还焦点', async () => {
+    hooks.camera = new PerspectiveCamera();
+    render(<ResearchScene config={model.config} result={result} selected={0} affine={20} onSelect={vi.fn()} />);
+    const viewport = screen.getByRole('region');
+    viewport.focus();
+    fireEvent.keyDown(viewport, { key: 'l' });
+    const surfaceCheckbox = screen.getByRole('checkbox', { name: '嵌入曲面' });
+    // 弹层属于独立门户，验证真实焦点和事件路径，不能只在原视场派发 Escape。
+    await waitFor(() => expect(surfaceCheckbox).toHaveFocus());
+    fireEvent.keyDown(surfaceCheckbox, { key: 'Escape' });
+    expect(screen.getByRole('button', { name: '场景图层' })).toHaveAttribute('aria-expanded', 'false');
+    expect(viewport).toHaveFocus();
+  }, INTERACTION_TEST_TIMEOUT_MS);
   it('GPU 创建失败时保留明确的二维数据入口提示', () => {
     hooks.camera = new PerspectiveCamera(); hooks.fail = true;
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);

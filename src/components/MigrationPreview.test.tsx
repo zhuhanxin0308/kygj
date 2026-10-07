@@ -19,4 +19,20 @@ describe('旧格式迁移审阅', () => {
     expect(screen.getByRole('button', { name: '取消迁移' })).toBeDisabled();
     expect(screen.getByText('项目已变化')).toBeInTheDocument();
   });
+  it('迁移已提交后的恢复界面展示完整回执且只允许重新打开', () => {
+    const onConfirm = vi.fn(); const onRefresh = vi.fn(); const onRetry = vi.fn();
+    const receipt = { planId: migrationPlan.id, directory: migrationPlan.directory, projectId: migrationPlan.projectId, fromVersion: 1 as const, toVersion: 2 as const, backupPath: migrationPlan.backupPath, backupSha256: 'f'.repeat(64), migratedAt: migrationPlan.createdAt, legacyResultCount: 1 };
+    const props = { plan: null, receipt, busy: false, error: '读取暂时失败', onCancel: vi.fn(), onConfirm, onRefresh, onRetry };
+    const { rerender } = render(<MigrationPreview {...props} />);
+    expect(screen.getByText(receipt.backupSha256)).toBeInTheDocument();
+    expect(screen.getByText(receipt.backupPath)).toBeInTheDocument();
+    expect(screen.getByText('读取暂时失败')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '确认备份并迁移此项目' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '重新预览计划' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '重新打开已迁移项目' }));
+    expect(onRetry).toHaveBeenCalledOnce();
+    expect(onConfirm).not.toHaveBeenCalled(); expect(onRefresh).not.toHaveBeenCalled();
+    rerender(<MigrationPreview {...props} busy />);
+    expect(screen.getByRole('button', { name: '关闭迁移回执' })).toBeDisabled();
+  });
 });

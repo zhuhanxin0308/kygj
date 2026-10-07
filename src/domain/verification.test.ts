@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { verificationDraftSchema, verificationRecordSchema, verificationRuleSchema, verificationStateSchema } from './verification';
+import { VERIFICATION_TEXT_MAX_BYTES, verificationDraftSchema, verificationRecordSchema, verificationRuleSchema, verificationStateSchema } from './verification';
 import { verificationRecord, verificationRule, verificationState } from '../test/verificationFixtures';
 
 // 独立检查与执行完成分开；缺证据、篡改布尔结论和身份漂移不能进入界面。
@@ -54,5 +54,17 @@ describe('独立验证接收契约', () => {
     expect(verificationDraftSchema.safeParse({ ...draft, title: '标题\n第二行' }).success).toBe(false);
     expect(verificationDraftSchema.safeParse({ ...draft, changeReason: '理由\0损坏' }).success).toBe(false);
     expect(verificationDraftSchema.safeParse({ ...draft, changeReason: '中'.repeat(4096) }).success).toBe(false);
+  });
+  it('UTF-8 边界包含中文与表情，历史理由与中断记录保持真实内容', () => {
+    // 中文占三字节、表情占四字节，限制不能误用 JavaScript 字符串长度。
+    const boundary = `${'中'.repeat((VERIFICATION_TEXT_MAX_BYTES - 4) / 3)}😀`;
+    const draft = { baseVersionId: verificationRule.id, title: '  原样标题  ', changeReason: '  第一段\r\n\t第二段  ', thresholds: [{ metricId: 'energy_error', threshold: 0, basis: boundary }] };
+    expect(verificationDraftSchema.parse(draft)).toEqual(draft);
+    expect(verificationDraftSchema.safeParse({ ...draft, thresholds: [{ ...draft.thresholds[0], basis: `${boundary}a` }] }).success).toBe(false);
+    expect(verificationDraftSchema.safeParse({ ...draft, changeReason: '异常\u0085控制符' }).success).toBe(false);
+    expect(verificationRuleSchema.parse({ ...verificationRule, changeReason: draft.changeReason }).changeReason).toBe(draft.changeReason);
+    const interrupted = { ...verificationRecord, executionStatus: 'interrupted', conclusion: 'inconclusive', checks: [], error: { code: 'verification_interrupted', message: '宿主退出导致检查中断' } };
+    expect(verificationRecordSchema.parse(interrupted)).toEqual(interrupted);
+    expect(verificationRecordSchema.safeParse({ ...verificationRecord, checks: [{ ...verificationRecord.checks[0], metricId: 'propagation_completion', threshold: 1 }] }).success).toBe(false);
   });
 });
