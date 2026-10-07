@@ -1,0 +1,58 @@
+{
+  "title": "引力科研工作台·科技版全局设计规范",
+  "date": "2026-10-06",
+  "scope": "49张完整功能界面、1张视觉规范、6张交互分镜",
+  "palette": {
+    "background": "#090E17",
+    "surface": "#111A29",
+    "raised": "#17243A",
+    "primary": "#3EDCFF",
+    "secondary": "#578CFF",
+    "warning": "#FFB65C",
+    "error": "#FF6B7A",
+    "success": "#36D6B0",
+    "text": "#EDF4FF",
+    "muted": "#A6B7CF"
+  },
+  "spacing": 8,
+  "radius": 6,
+  "layout": {
+    "navigation": 64,
+    "topbar": 48,
+    "asset_tree": "200—240，可收起",
+    "inspector": "280—320，按选中对象展开",
+    "canvas": "分析页占主要空间，表格/代码/流程页按任务切换",
+    "status": "执行、验证、复核独立显示"
+  },
+  "interaction": [
+    "常用操作用语义图标，提供悬停说明、键盘焦点及可访问名称",
+    "表单标签、单位、风险与不可逆确认保留必要文字，不用图标猜含义",
+    "命令搜索与最近动作降低导航层数；上下文工具栏按选中对象出现",
+    "高级设置渐进展开，完整功能仍可进入；预检、执行授权和来源记录不可省略",
+    "提示以感叹号图标和短句呈现，详情按需展开",
+    "3D提供旋转、平移、缩放、复位、投影、剖切、图层、拾取和时间轴；与二维图表双向联动"
+  ],
+  "motion_design_targets_ms": {
+    "hover": 120,
+    "selection": 160,
+    "drawer": 220,
+    "workspace_transition": 240,
+    "camera_reset": 360
+  },
+  "motion_policy": "数值为设计意图，非性能实测；非必要过渡可关闭，遵循减少动态效果偏好；播放/演化可暂停与逐帧操作；不闪烁且不把动画速度表示成计算进度。",
+  "visual_semantics": "3D嵌入图、谱、后验等为设计示意，不是计算结果；截图不能证明像素级规范或可访问性已实现。",
+  "references": [
+    {
+      "name": "W3C非文字对比度",
+      "url": "https://www.w3.org/WAI/WCAG22/Understanding/non-text-contrast.html"
+    },
+    {
+      "name": "W3C交互动画",
+      "url": "https://www.w3.org/WAI/WCAG22/Understanding/animation-from-interactions.html"
+    },
+    {
+      "name": "WAI工具提示模式",
+      "url": "https://www.w3.org/WAI/ARIA/apg/patterns/tooltip/"
+    }
+  ]
+}

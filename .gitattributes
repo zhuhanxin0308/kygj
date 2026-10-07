@@ -2,4 +2,5 @@
 *.png binary
 *.jpg binary
 *.ico binary
-
+# 设计生成记录是原始归档，保留原字节；项目文档仍统一使用LF。
+design/**/*.json -text

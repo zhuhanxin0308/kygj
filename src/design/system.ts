@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
 
-// v3唯一视觉基准：outputs/界面设计稿-科技版/全局设计规范.json。
+// v3唯一视觉基准：仓库design/v3/全局设计规范.json，页面与缺稿索引见design/README.md。
 // 科研数值、验证状态和嵌入几何仍来自真实数据，设计图的示例值不属于主题。
 export const DESIGN_COLORS = {
   background: '#090E17', surface: '#111A29', raised: '#17243A', primary: '#3EDCFF', secondary: '#578CFF',
