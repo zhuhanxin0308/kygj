@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PerspectiveCamera, OrthographicCamera } from 'three';
+import { BufferGeometry, PerspectiveCamera, OrthographicCamera } from 'three';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import type { ReactNode } from 'react';
 import { ResearchScene } from './ResearchScene';
@@ -49,6 +49,26 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); hooks.fail = false; hooks.size = { height: 600, width: 800 }; });
 describe('三维场景与可访问操作', () => {
+  it('曲面与经纬线框使用独立索引，剖切和卸载时完整释放两份GPU几何', () => {
+    hooks.camera = new PerspectiveCamera();
+    const indices = vi.spyOn(BufferGeometry.prototype, 'setIndex');
+    const dispose = vi.spyOn(BufferGeometry.prototype, 'dispose');
+    try {
+      const view = render(<ResearchScene config={model.config} result={null} selected={0} affine={0} onSelect={vi.fn()} />);
+      expect(indices).toHaveBeenCalledTimes(2);
+      const [surface, wire] = indices.mock.contexts as BufferGeometry[];
+      expect(surface).not.toBe(wire);
+      expect(wire.getAttribute('position').array).toEqual(surface.getAttribute('position').array);
+      expect(wire.getIndex()!.count).toBeLessThan(surface.getIndex()!.count);
+      fireEvent.click(screen.getByRole('button', { name: '曲面剖切' }));
+      expect(dispose.mock.contexts).toContain(surface);
+      expect(dispose.mock.contexts).toContain(wire);
+      view.unmount();
+      expect(dispose).toHaveBeenCalledTimes(4);
+    } finally {
+      indices.mockRestore(); dispose.mockRestore();
+    }
+  });
   it('从冻结结果构建轨迹并支持拾取、缩放、投影与剖切', () => {
     hooks.camera = new PerspectiveCamera();
     const onSelect = vi.fn();

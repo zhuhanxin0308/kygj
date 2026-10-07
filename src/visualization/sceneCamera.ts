@@ -8,7 +8,7 @@ export const SCENE_DISPLAY = {
   near: 0.01, far: 100, fieldOfView: 42, gridDivisions: 24, gridExtent: 3,
   zoomStep: 1.25, minZoom: 0.25, maxZoom: 8, minimumMarker: 0.009,
   selectedMarkerScale: 0.14, markerScale: 0.09, axisSize: 0.45,
-  surfaceOpacity: 0.19, wireOpacity: 0.3,
+  surfaceOpacity: 0.12, wireOpacity: 0.35,
 } as const;
 
 export function cameraPosition(extent: number, fieldOfView: number, aspect: number): [number, number, number] {

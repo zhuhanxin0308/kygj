@@ -27,15 +27,20 @@ class SceneBoundary extends Component<{ children: ReactNode }, { failed: boolean
 function Surface({ config, cut, scale }: { config: EllisConfig; cut: boolean; scale: number }) {
   const geometry = useMemo(() => {
     const mesh = makeSurface(config.throatRadius, config.initialRadius, cut, scale);
+    const positions = new BufferAttribute(new Float32Array(mesh.positions), 3);
     const buffer = new BufferGeometry();
-    buffer.setAttribute('position', new BufferAttribute(new Float32Array(mesh.positions), 3));
+    buffer.setAttribute('position', positions);
     buffer.setIndex(mesh.indices); buffer.computeVertexNormals();
-    return buffer;
+    // 经纬线与曲面共享真实顶点，但各用独立索引，绝不把三角面降采样成展示网格。
+    const wire = new BufferGeometry();
+    wire.setAttribute('position', positions);
+    wire.setIndex(mesh.wireIndices);
+    return { surface: buffer, wire };
   }, [config.throatRadius, config.initialRadius, cut, scale]);
-  useEffect(() => () => geometry.dispose(), [geometry]);
+  useEffect(() => () => { geometry.surface.dispose(); geometry.wire.dispose(); }, [geometry]);
   return <group>
-    <mesh geometry={geometry}><meshStandardMaterial color={DESIGN_COLORS.secondary} transparent opacity={CAMERA.surfaceOpacity} side={DoubleSide} depthWrite={false} /></mesh>
-    <mesh geometry={geometry}><meshBasicMaterial color={DESIGN_COLORS.primary} wireframe transparent opacity={CAMERA.wireOpacity} side={DoubleSide} depthWrite={false} /></mesh>
+    <mesh geometry={geometry.surface}><meshStandardMaterial color={DESIGN_COLORS.secondary} transparent opacity={CAMERA.surfaceOpacity} side={DoubleSide} depthWrite={false} /></mesh>
+    <lineSegments geometry={geometry.wire}><lineBasicMaterial color={DESIGN_COLORS.secondary} transparent opacity={CAMERA.wireOpacity} depthWrite={false} /></lineSegments>
   </group>;
 }
 

@@ -23,6 +23,68 @@ describe('嵌入与真实样本联动', () => {
     expect(Math.min(...full.positions)).toBeLessThan(0);
     expect(full.positions.every(Number.isFinite)).toBe(true);
   });
+  it.each([false, true])('稀疏线框只沿相邻经纬边且无重复或三角对角线（剖切：%s）', (cut) => {
+    const mesh = makeSurface(1, 10, cut);
+    expect(mesh.wireIndices).toBeDefined();
+    const stride = DISPLAY_LIMITS.angularSegments + 1;
+    const edges = new Set<string>();
+    const latitudeRows = new Set<number>();
+    const longitudeColumns = new Set<number>();
+    for (let index = 0; index < mesh.wireIndices.length; index += 2) {
+      const start = mesh.wireIndices[index];
+      const end = mesh.wireIndices[index + 1];
+      const startRow = Math.floor(start / stride); const endRow = Math.floor(end / stride);
+      const startColumn = start % stride; const endColumn = end % stride;
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(end).toBeLessThan(mesh.positions.length / 3);
+      const alongLatitude = startRow === endRow && endColumn - startColumn === 1;
+      const alongLongitude = startColumn === endColumn && endRow - startRow === 1;
+      expect(alongLatitude || alongLongitude).toBe(true);
+      if (alongLatitude) latitudeRows.add(startRow);
+      if (alongLongitude) longitudeColumns.add(startColumn);
+      const key = `${start}:${end}`;
+      expect(edges.has(key)).toBe(false); edges.add(key);
+    }
+    // 线框降低线条密度，但三角曲面的分辨率保持不变。
+    expect(latitudeRows.size).toBeLessThan(DISPLAY_LIMITS.radialSegments + 1);
+    expect(longitudeColumns.size).toBeLessThan(DISPLAY_LIMITS.angularSegments + 1);
+    expect(mesh.indices).toHaveLength(DISPLAY_LIMITS.radialSegments * DISPLAY_LIMITS.angularSegments * 6);
+  });
+  it.each([false, true])('稀疏线框覆盖双侧口沿、喉部与完整剖切边界（剖切：%s）', (cut) => {
+    const mesh = makeSurface(1, 10, cut);
+    expect(mesh.wireIndices).toBeDefined();
+    const { radialSegments, angularSegments } = DISPLAY_LIMITS;
+    const stride = angularSegments + 1;
+    const edges = new Set(Array.from({ length: mesh.wireIndices.length / 2 }, (_, index) => `${mesh.wireIndices[index * 2]}:${mesh.wireIndices[index * 2 + 1]}`));
+    for (const row of [0, radialSegments / 2, radialSegments]) {
+      for (let column = 0; column < angularSegments; column += 1) {
+        expect(edges.has(`${row * stride + column}:${row * stride + column + 1}`)).toBe(true);
+      }
+    }
+    for (let row = 0; row < radialSegments; row += 1) {
+      expect(edges.has(`${row * stride}:${(row + 1) * stride}`)).toBe(true);
+      // 完整曲面的0与2π缝线重合，仅画一次；剖切曲面的两条开口边均保留。
+      expect(edges.has(`${row * stride + angularSegments}:${(row + 1) * stride + angularSegments}`)).toBe(cut);
+    }
+    const mouth = mesh.positions.slice(0, 3);
+    const seam = mesh.positions.slice(angularSegments * 3, angularSegments * 3 + 3);
+    expect(seam[0]).toBeCloseTo(mouth[0]);
+    expect(seam[1]).toBeCloseTo(cut ? -mouth[1] : mouth[1]);
+    expect(seam[2]).toBeCloseTo(0);
+  });
+  it('线框引用同一真实嵌入顶点，归一化不改变曲面比例和拓扑', () => {
+    const physical = makeSurface(2, 10, false);
+    const normalized = makeSurface(2, 10, false, 10);
+    expect(physical.wireIndices).toBeDefined();
+    expect(normalized.wireIndices).toEqual(physical.wireIndices);
+    expect(normalized.indices).toEqual(physical.indices);
+    expect(normalized.positions).toEqual(physical.positions.map((coordinate) => coordinate / 10));
+    expect(physical.positions).toHaveLength((DISPLAY_LIMITS.radialSegments + 1) * (DISPLAY_LIMITS.angularSegments + 1) * 3);
+    const throatVertex = DISPLAY_LIMITS.radialSegments / 2 * (DISPLAY_LIMITS.angularSegments + 1);
+    expect(physical.positions.slice(throatVertex * 3, throatVertex * 3 + 3)).toEqual([0, 2, 0]);
+    expect(physical.positions[0]).toBeCloseTo(-2 * Math.asinh(5));
+    expect(physical.positions[1]).toBeCloseTo(Math.sqrt(104));
+  });
   it('以真实采样插值并钳制到边界', () => {
     expect(sampleAtAffine(samples, 1)?.l).toBeCloseTo(1);
     expect(sampleAtAffine(samples, -1)).toEqual(samples[0]);

@@ -3,6 +3,7 @@ import type { Sample } from './contracts';
 // 显示网格和绘图抽样只控制呈现成本，不改写原始科研样本或验证门槛。
 export const DISPLAY_LIMITS = {
   radialSegments: 96, angularSegments: 64, maxLineSamples: 2000,
+  wireRadialSegments: 16, wireAngularSegments: 16,
   frameIntervalMs: 40, secondsPerPlayback: 12,
 } as const;
 export type Point3 = [number, number, number];
@@ -19,7 +20,8 @@ export function embeddingPoint(l: number, phi: number, throatRadius: number): Po
 export function makeSurface(throatRadius: number, extent: number, cut: boolean, displayScale = 1) {
   const positions: number[] = [];
   const indices: number[] = [];
-  const { radialSegments, angularSegments } = DISPLAY_LIMITS;
+  const wireIndices: number[] = [];
+  const { radialSegments, angularSegments, wireRadialSegments, wireAngularSegments } = DISPLAY_LIMITS;
   const angle = cut ? Math.PI : Math.PI * 2;
   for (let radial = 0; radial <= radialSegments; radial += 1) {
     const l = -extent + (2 * extent * radial) / radialSegments;
@@ -34,7 +36,26 @@ export function makeSurface(throatRadius: number, extent: number, cut: boolean, 
       indices.push(first, next, first + 1, next, next + 1, first + 1);
     }
   }
-  return { positions, indices };
+  // 线框只选取原曲面的经纬边；保持高分辨率三角面，避免绘制密集三角对角线。
+  const rowStride = angularSegments + 1;
+  const radialStep = radialSegments / wireRadialSegments;
+  const longitudeCount = cut ? wireAngularSegments / 2 : wireAngularSegments;
+  const angularStep = angularSegments / longitudeCount;
+  for (let radial = 0; radial <= radialSegments; radial += radialStep) {
+    for (let angular = 0; angular < angularSegments; angular += 1) {
+      const first = radial * rowStride + angular;
+      wireIndices.push(first, first + 1);
+    }
+  }
+  // 完整曲面省去与0重合的2π经线；剖切则保留0、π两条开口边界。
+  const lastLongitude = cut ? angularSegments : angularSegments - angularStep;
+  for (let angular = 0; angular <= lastLongitude; angular += angularStep) {
+    for (let radial = 0; radial < radialSegments; radial += 1) {
+      const first = radial * rowStride + angular;
+      wireIndices.push(first, first + rowStride);
+    }
+  }
+  return { positions, indices, wireIndices };
 }
 
 // 二分定位后线性插值仅用于光标；表格和导出始终保留原始点。
