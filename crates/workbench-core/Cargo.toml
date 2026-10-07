@@ -7,7 +7,8 @@ rust-version.workspace = true
 
 [dependencies]
 serde.workspace = true
-serde_json.workspace = true
+# 科学结果及其内容哈希要求浮点数逐位往返，不能在读取已保存JSON时发生二次舍入。
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 thiserror.workspace = true
 uuid.workspace = true
 chrono.workspace = true

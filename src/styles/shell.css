@@ -15,12 +15,17 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--color-
 .host-status { font-size: 12px; }
 .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--color-success); flex-shrink: 0; }
 .live-dot.muted { background: var(--color-muted); }
-.workspace-body { flex: 1; min-height: 0; display: grid; grid-template-columns: var(--layout-navigation) var(--resource-size) minmax(0, 1fr) var(--inspector-size); gap: var(--layout-gap); padding: 8px 8px 8px 0; }
-.workspace-body.resources-collapsed { grid-template-columns: var(--layout-navigation) minmax(0, 1fr) var(--inspector-size); }
-.workspace-body.inspector-collapsed { grid-template-columns: var(--layout-navigation) var(--resource-size) minmax(0, 1fr); }
-.workspace-body.resources-collapsed.inspector-collapsed { grid-template-columns: var(--layout-navigation) minmax(0, 1fr); }
+/* 保持四条网格轨道，使折叠和视图切换能按240ms插值；隐藏面板仍保留内部状态。 */
+.workspace-body { flex: 1; min-height: 0; display: grid; grid-template-columns: var(--layout-navigation) minmax(0, calc(var(--resource-size) + var(--layout-gap))) minmax(0, 1fr) minmax(0, calc(var(--inspector-size) + var(--layout-gap))); padding: 8px 8px 8px 0; transition: grid-template-columns var(--motion-workspace) ease; }
+.workspace-body.resources-collapsed { grid-template-columns: var(--layout-navigation) minmax(0, 0px) minmax(0, 1fr) minmax(0, calc(var(--inspector-size) + var(--layout-gap))); }
+.workspace-body.inspector-collapsed { grid-template-columns: var(--layout-navigation) minmax(0, calc(var(--resource-size) + var(--layout-gap))) minmax(0, 1fr) minmax(0, 0px); }
+.workspace-body.resources-collapsed.inspector-collapsed { grid-template-columns: var(--layout-navigation) minmax(0, 0px) minmax(0, 1fr) minmax(0, 0px); }
+.workspace-body > .primary-nav { grid-column: 1; grid-row: 1; }
+.workspace-body > .resource-panel { grid-column: 2; grid-row: 1; margin-left: var(--layout-gap); }
+.workspace-body > .research-main { grid-column: 3; grid-row: 1; margin-left: var(--layout-gap); }
+.workspace-body > .inspector-stack { grid-column: 4; grid-row: 1; margin-left: var(--layout-gap); }
 .resource-panel[hidden], .inspector-stack[hidden] { display: none; }
-.primary-nav { display: flex; flex-direction: column; align-items: stretch; border-right: 1px solid var(--color-border); gap: 8px; }
+.primary-nav { display: flex; flex-direction: column; align-items: stretch; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; border-right: 1px solid var(--color-border); gap: 8px; }
 .nav-entry { display: flex; flex-direction: column; align-items: center; padding: 8px 0; font-size: 12px; color: var(--color-muted); border-left: 2px solid transparent; border-radius: var(--layout-radius); transition: color var(--motion-selection), background var(--motion-selection), border-color var(--motion-selection); }
 .nav-entry .ant-btn { width: 40px; height: 32px; font-size: 22px; }
 .nav-entry:has(button:disabled) { opacity: .5; }
@@ -33,5 +38,7 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--color-
 .status-end { margin-left: auto; }
 .semantic-tag { border-radius: var(--layout-radius); }
 @media (max-width: 1280px) { .workbench { --resource-size: 200px; --inspector-size: 280px; } .workspace-name, .subtle { display: none; } .topbar { gap: 8px; } .statusbar { gap: 16px; } }
+/* 低窗口先缩减留白；导航仍可滚动，所有入口始终保留。 */
+@media (max-height: 800px) { .primary-nav { gap: calc(var(--layout-gap) / 2); } .nav-entry { padding-block: calc(var(--layout-gap) / 2); } .nav-bottom { padding-block: var(--layout-gap); } }
 /* 减少动态效果不隐藏信息；显式轨迹播放仍可暂停和逐帧操作。 */
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }

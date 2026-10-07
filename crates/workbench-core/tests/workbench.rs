@@ -131,7 +131,8 @@ fn real_nonradial_and_critical_results_reassess_saved_evidence_without_inventing
     let verified = workbench.execute_verification(&project.id, ExecuteVerification {
         run_id:run.id.clone(), rule_version_id:rule.id.clone(), client_request_id:"真实六支复评".into(), previous_record_id:None,
     }).unwrap();
-    assert_eq!(verified.conclusion, VerificationConclusion::Inconclusive);
+    // 与引擎现有40预算临界回归一致：分离支数值漂移必须压过缺少求积证据的“不确定”。
+    assert_eq!(verified.conclusion, VerificationConclusion::Failed);
     let trajectories = &complete.result.as_ref().unwrap().trajectories;
     for (index, trajectory) in trajectories.iter().enumerate() {
         let check = |metric| verified.checks.iter().find(|item| item.trajectory_index == Some(index) && item.metric_id == metric).unwrap();
@@ -146,9 +147,8 @@ fn real_nonradial_and_critical_results_reassess_saved_evidence_without_inventing
         if trajectory.impact_parameter.abs() == model.config.throat_radius {
             assert_eq!(trajectory.termination, "budget_exhausted");
             assert_eq!(check(VerificationMetric::PropagationCompletion).conclusion, VerificationConclusion::NotApplicable);
-            for metric in [VerificationMetric::CriticalRelationError, VerificationMetric::CriticalDirectionError, VerificationMetric::CriticalPositionError] {
-                assert_eq!(check(metric).conclusion, VerificationConclusion::Passed);
-            }
+            assert!([VerificationMetric::CriticalRelationError, VerificationMetric::CriticalDirectionError, VerificationMetric::CriticalPositionError]
+                .iter().any(|metric|check(*metric).conclusion == VerificationConclusion::Failed));
         } else {
             assert_eq!(check(VerificationMetric::PropagationCompletion).conclusion, VerificationConclusion::Passed);
             assert_eq!(check(VerificationMetric::AzimuthReferenceError).conclusion, VerificationConclusion::Passed);
@@ -164,4 +164,69 @@ fn real_nonradial_and_critical_results_reassess_saved_evidence_without_inventing
     assert_eq!(workbench.get_run_verification_state(&project.id, &run.id, &rule.id).unwrap().latest_record, Some(verified));
     assert_eq!(workbench.get_run(&project.id, &run.id).unwrap(), complete);
     workbench.shutdown().unwrap();
+}
+
+#[test]
+fn real_short_critical_branch_passes_finite_scope_checks_without_claiming_propagation_completion() {
+    // 引擎test_short_critical_trajectory_has_independent_branch_checks使用同一有限预算。
+    const FINITE_CRITICAL_BUDGET: f64 = 1.0;
+    let directory = tempfile::tempdir().unwrap();
+    let workbench = Workbench::new();
+    let project = workbench.create_project(directory.path(), "真实临界有限区间").unwrap().project;
+    let mut input = config();
+    input.impact_parameters = vec![1.0, -1.0];
+    input.max_affine_parameter = FINITE_CRITICAL_BUDGET;
+    let model = workbench.save_model(&project.id, "正反旋转临界有限区间", input).unwrap();
+    let report = workbench.prepare_run(&project.id, &model.id, &python()).unwrap();
+    let run = workbench.start_run(&project.id, &report.id).unwrap();
+    let complete = await_terminal(&workbench, &project.id, &run.id);
+    assert_eq!(complete.state, RunState::Completed, "{:?}", complete.error);
+    let rule = workbench.list_verification_rules(&project.id, 0, 1).unwrap().rules.remove(0);
+    let verified = workbench.execute_verification(&project.id, ExecuteVerification {
+        run_id:run.id.clone(),rule_version_id:rule.id,client_request_id:"临界有限支复评".into(),previous_record_id:None,
+    }).unwrap();
+    assert_eq!(verified.conclusion, VerificationConclusion::Inconclusive);
+    for (index, ray) in complete.result.as_ref().unwrap().trajectories.iter().enumerate() {
+        assert_eq!(ray.termination, "budget_exhausted"); assert!(ray.events.is_empty());
+        let check = |metric| verified.checks.iter().find(|item|item.trajectory_index == Some(index) && item.metric_id == metric).unwrap();
+        for metric in [VerificationMetric::CriticalRelationError, VerificationMetric::CriticalDirectionError, VerificationMetric::CriticalPositionError] {
+            assert_eq!(check(metric).conclusion, VerificationConclusion::Passed);
+        }
+        assert_eq!(check(VerificationMetric::PropagationCompletion).reason_code, "critical_finite_scope");
+        assert_eq!(check(VerificationMetric::PropagationCompletion).conclusion, VerificationConclusion::NotApplicable);
+        assert_eq!(check(VerificationMetric::AzimuthReferenceError).reason_code, "reference_endpoint_missing");
+        assert_eq!(check(VerificationMetric::ReferenceQuadratureError).reason_code, "quadrature_evidence_missing");
+    }
+    assert_eq!(workbench.get_run(&project.id, &run.id).unwrap(), complete);
+    workbench.shutdown().unwrap();
+}
+
+#[test]
+fn real_scientific_samples_keep_their_bits_and_hash_after_json_roundtrip() {
+    use std::sync::{Arc, atomic::AtomicBool};
+    use workbench_core::{limits::ProcessLimits, process, storage::sha256_bytes};
+    let directory = tempfile::tempdir().unwrap();
+    let limits = ProcessLimits::default();
+    let environment = process::probe_environment(&python(), &limits).unwrap();
+    let mut input = config();
+    input.impact_parameters = vec![0.5];
+    let request = TraceRequest::new("真实科学数值往返".into(), input);
+    let original = process::execute_engine(directory.path(), &request, &environment, &limits, Arc::new(AtomicBool::new(false))).unwrap();
+    let encoded = serde_json::to_vec(&original).unwrap();
+    let decoded: TraceResult = serde_json::from_slice(&encoded).unwrap();
+    for (ray, restored_ray) in original.trajectories.iter().zip(&decoded.trajectories) {
+        for (index, (sample, restored)) in ray.samples.iter().zip(&restored_ray.samples).enumerate() {
+            // 科学产物的SHA-256以精确数值为基础，允许范围内的浮点数不能被JSON解析悄悄舍入。
+            for (field, value, persisted) in [
+                ("affine", sample.affine, restored.affine), ("t", sample.t, restored.t),
+                ("l", sample.l, restored.l), ("theta", sample.theta, restored.theta),
+                ("phi", sample.phi, restored.phi), ("kt", sample.kt, restored.kt),
+                ("kl", sample.kl, restored.kl), ("kTheta", sample.k_theta, restored.k_theta),
+                ("kPhi", sample.k_phi, restored.k_phi),
+            ] {
+                assert_eq!(value.to_bits(), persisted.to_bits(), "样本{index}字段{field}从{value:?}变成{persisted:?}");
+            }
+        }
+    }
+    assert_eq!(sha256_bytes(&encoded), sha256_bytes(&serde_json::to_vec(&decoded).unwrap()));
 }

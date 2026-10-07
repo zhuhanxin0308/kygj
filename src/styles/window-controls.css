@@ -1,0 +1,5 @@
+/* 原生操作仍由 Ant Design 按钮提供焦点与状态，尺寸沿用一体顶栏令牌。 */
+.topbar[data-tauri-drag-region] { user-select: none; }
+.window-controls { display: flex; flex-shrink: 0; align-items: center; gap: var(--layout-gap); }
+.window-controls .ant-btn { width: calc(var(--layout-topbar) - var(--layout-gap)); height: calc(var(--layout-topbar) - var(--layout-gap)); }
+.window-controls .window-close:not(:disabled):hover { color: var(--color-text); background: var(--color-error); }

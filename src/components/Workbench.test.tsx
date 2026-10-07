@@ -3,11 +3,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { Workbench } from './Workbench';
 import type { DesktopClient, FileDialogs } from '../services/desktop';
-import { environment, model, preflight, project, run } from '../test/fixtures';
+import { environment, model, preflight, project, result, run } from '../test/fixtures';
 
 // GPU 与图表画布只替换渲染边界，工作区使用真实状态与服务接口。
 vi.mock('../visualization/ResearchScene', () => ({ ResearchScene: ({ config, result, affine }: { config: { throatRadius: number }; result: unknown; affine: number }) => <div data-testid="scene" data-throat={config?.throatRadius} data-result={String(Boolean(result))} data-affine={affine}>Ellis 几何视图</div>, RAY_COLORS: ['#3EDCFF'] }));
-vi.mock('../visualization/AnalysisChart', () => ({ AnalysisChart: () => <div>真实轨迹分析</div> }));
+vi.mock('../visualization/AnalysisChart', () => ({ AnalysisChart: ({ layout }: { layout: string }) => <section aria-label="轨迹分析图表" data-layout={layout}>真实轨迹分析</section> }));
 afterEach(cleanup);
 const makeClient = () => ({
   available: () => true, createProject: vi.fn().mockResolvedValue(project), openProject: vi.fn().mockResolvedValue(project),
@@ -25,6 +25,106 @@ const dialogs: FileDialogs = { directory: async () => 'C:/Research', python: asy
 // 工作区包含完整主题和模态层，使用独立的交互测试时限，不改变产品或科学预算。
 const WORKBENCH_TEST_TIMEOUT_MS = 20000;
 describe('工作区失败与可访问行为', () => {
+  it('主导航跟随真实工作区显示唯一当前项，模态操作不冒充页面切换', async () => {
+    render(<Workbench client={makeClient()} dialogs={dialogs} />);
+    const navigation = screen.getByRole('navigation', { name: '主导航' });
+    // 宿主deep拖动支持品牌文字和图形，同时由Tauri排除交互按钮。
+    expect(screen.getByRole('banner')).toHaveAttribute('data-tauri-drag-region', 'deep');
+    expect(screen.getByText('引力科研工作台').closest('.brand')).toHaveAttribute('data-tauri-drag-region', 'deep');
+    expect(screen.getByText('本地研究工作区')).toHaveAttribute('data-tauri-drag-region', 'deep');
+    expect(within(navigation).getByRole('button', { name: '项目' })).toHaveAttribute('aria-current', 'page');
+    fireEvent.click(within(navigation).getByRole('button', { name: '验证' }));
+    expect(within(navigation).getByRole('button', { name: '验证' })).toHaveAttribute('aria-current', 'page');
+    expect(within(navigation).getByRole('button', { name: '项目' })).not.toHaveAttribute('aria-current');
+    fireEvent.click(within(navigation).getByRole('button', { name: '模型' }));
+    expect(within(navigation).getByRole('button', { name: '模型' })).toHaveAttribute('aria-current', 'page');
+    fireEvent.click(within(navigation).getByRole('button', { name: '环境' }));
+    expect(within(navigation).getByRole('button', { name: '环境' })).toHaveAttribute('aria-current', 'page');
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+    expect(screen.getByRole('dialog', { name: '命令搜索' })).toBeInTheDocument();
+    expect(navigation.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
+    expect(within(navigation).getByRole('button', { name: '环境' })).toHaveAttribute('aria-current', 'page');
+  }, WORKBENCH_TEST_TIMEOUT_MS);
+  it('验证明细采用宽画布和下方时间轴，并分别保存两种构图的面板选择', async () => {
+    const client = makeClient();
+    render(<Workbench client={client} dialogs={dialogs} />);
+    fireEvent.click(screen.getByRole('button', { name: /打开项目/ }));
+    await screen.findByText(model.label);
+    const chart = await screen.findByRole('region', { name: '轨迹分析图表' });
+    const timeline = screen.getByLabelText('展示时间轴');
+    expect(timeline.compareDocumentPosition(chart) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '收起项目资源' }));
+    fireEvent.click(screen.getByRole('button', { name: '收起检查器' }));
+    fireEvent.click(screen.getByRole('button', { name: '验证' }));
+    expect(screen.queryByRole('complementary', { name: '项目资源' })).not.toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: '上下文检查器' })).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: '继续研究' })).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: '轨迹分析图表' })).toHaveAttribute('data-layout', 'detail');
+    expect(screen.getByRole('region', { name: '轨迹分析图表' }).compareDocumentPosition(screen.getByLabelText('展示时间轴')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '展开项目资源' }));
+    fireEvent.click(screen.getByRole('button', { name: '收起检查器' }));
+    fireEvent.click(screen.getByRole('button', { name: '模型' }));
+    expect(screen.queryByRole('complementary', { name: '项目资源' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('complementary', { name: '上下文检查器' })).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: '轨迹分析图表' })).toHaveAttribute('data-layout', 'overview');
+    fireEvent.click(screen.getByRole('button', { name: '展开检查器' }));
+    expect(screen.getByRole('region', { name: '继续研究' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '验证' }));
+    expect(screen.getByRole('complementary', { name: '项目资源' })).toBeInTheDocument();
+    expect(screen.queryByRole('complementary', { name: '上下文检查器' })).not.toBeInTheDocument();
+    expect(client.startRun).not.toHaveBeenCalled();
+  }, 60000);
+  it('选中光线摘要始终读取冻结结果，切换光线和编辑草稿不混淆参数来源', async () => {
+    const client = makeClient();
+    // 此处仅增加显示身份夹具；积分正确性由真实引擎与科学验证测试覆盖。
+    const secondRay = { ...result.trajectories[0], impactParameter: 0.5 };
+    const frozenResult = { ...result, config: { ...result.config, impactParameters: [0, 0.5] }, trajectories: [result.trajectories[0], secondRay] };
+    const frozenRun = { ...run, result: frozenResult, request: { ...run.request, config: frozenResult.config } };
+    client.openProject.mockResolvedValue({ ...project, runs: [frozenRun] });
+    render(<Workbench client={client} dialogs={dialogs} />);
+    fireEvent.click(screen.getByRole('button', { name: /打开项目/ }));
+    await screen.findByText(model.label);
+    const summary = screen.getByRole('region', { name: '选中光线摘要' });
+    expect(within(summary).getByText('b = 0')).toBeInTheDocument();
+    expect(within(summary).getByLabelText('冻结喉尺度 a')).toHaveTextContent('1');
+    expect(within(summary).getByLabelText('冻结初始径向坐标 l₀')).toHaveTextContent('10');
+    expect(within(summary).getByText(run.id)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '当前模型草稿' })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('喉尺度 a'), { target: { value: '2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'b = 0.5' }));
+    expect(within(summary).getByText('b = 0.5')).toBeInTheDocument();
+    expect(within(summary).getByLabelText('冻结喉尺度 a')).toHaveTextContent('1');
+    expect(screen.getByLabelText('喉尺度 a')).toHaveValue('2');
+    fireEvent.click(screen.getByRole('button', { name: '预览草稿几何' }));
+    expect(screen.queryByLabelText('冻结喉尺度 a')).not.toBeInTheDocument();
+    expect(screen.getByText('当前为草稿几何预览！')).toBeInTheDocument();
+    expect(client.saveModel).not.toHaveBeenCalled();
+    expect(client.startRun).not.toHaveBeenCalled();
+  }, 60000);
+  it('构图隐藏键盘来源面板时，将资源项和检查器标签的焦点交还可见展开按钮', async () => {
+    render(<Workbench client={makeClient()} dialogs={dialogs} />);
+    fireEvent.click(screen.getByRole('button', { name: /打开项目/ }));
+    await screen.findByText(model.label);
+    fireEvent.click(screen.getByRole('button', { name: '收起项目资源' }));
+    fireEvent.click(screen.getByRole('button', { name: '验证' }));
+    fireEvent.click(screen.getByRole('button', { name: '展开项目资源' }));
+    const modelEntry = within(screen.getByRole('complementary', { name: '项目资源' })).getByText(model.label).closest('button')!;
+    // 键盘激活最终进入相同的点击处理器，显式聚焦保留真实的操作来源。
+    modelEntry.focus();
+    fireEvent.click(modelEntry);
+    expect.soft(screen.getByRole('button', { name: '展开项目资源' })).toHaveFocus();
+    fireEvent.click(screen.getByRole('button', { name: '收起检查器' }));
+    fireEvent.click(screen.getByRole('button', { name: '验证' }));
+    const parameterTab = screen.getByRole('tab', { name: '参数' });
+    parameterTab.focus();
+    fireEvent.click(parameterTab);
+    expect.soft(screen.getByRole('button', { name: '展开检查器' })).toHaveFocus();
+    // 主导航保持可见时，不应被焦点修复抢走键盘位置。
+    const validationNavigation = screen.getByRole('button', { name: '验证' });
+    validationNavigation.focus();
+    fireEvent.click(validationNavigation);
+    expect(validationNavigation).toHaveFocus();
+  }, 60000);
   it('资源栏和检查器可独立收起，恢复后草稿与冻结运行保持原样', async () => {
     const client = makeClient();
     render(<Workbench client={client} dialogs={dialogs} />);
@@ -101,6 +201,8 @@ describe('工作区失败与可访问行为', () => {
     fireEvent.click(within(records).getByRole('button', { name: run.id }));
     fireEvent.click(screen.getByRole('button', { name: '验证' }));
     expect(await screen.findByText('人工复核未记录')).toBeInTheDocument();
+    // 验证明细默认让出资源栏，用户仍可展开并执行原有刷新、筛选操作。
+    fireEvent.click(screen.getByRole('button', { name: '展开项目资源' }));
     fireEvent.click(screen.getByRole('button', { name: '刷新项目运行' }));
     await waitFor(() => expect(client.getProject).toHaveBeenCalled());
     fireEvent.change(screen.getByLabelText('筛选项目资源'), { target: { value: '不存在' } });

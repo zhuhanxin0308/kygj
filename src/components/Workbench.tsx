@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button, ConfigProvider, Descriptions, Empty, Input, Modal, Select, Slider, Space, Table, Tabs, Tooltip, Typography,
 } from 'antd';
@@ -25,20 +25,34 @@ import { WORKBENCH_THEME } from '../design/theme';
 import { GravityMark } from '../design/GravityMark';
 import { DesignNotice as Alert, SemanticTag } from './DesignNotice';
 import { RecentResearch } from './RecentResearch';
+import { SelectedRaySummary } from './SelectedRaySummary';
+import { WindowControls } from './WindowControls';
 
 // 大型可视化依赖独立加载，项目表单和宿主操作无需等待其解析完成。
 const ResearchScene = lazy(() => import('../visualization/ResearchScene').then((module) => ({ default: module.ResearchScene })));
 const AnalysisChart = lazy(() => import('../visualization/AnalysisChart').then((module) => ({ default: module.AnalysisChart })));
 
 interface Props { client?: DesktopClient; dialogs?: FileDialogs }
+type WorkspaceView = 'overview' | 'detail';
+type NavigationSection = 'project' | 'model' | 'validation' | 'environment';
+type WorkspacePanel = 'resources' | 'inspector';
 
 // 顶层只装配真实项目操作和视图；未实现领域能力保留固定导航并明确禁用。
 export function Workbench({ client = desktopClient, dialogs = fileDialogs }: Props) {
   const workspace = useWorkspace(client, dialogs);
   const { state, selectedRun, selectedModel, dirty, busy } = workspace;
   const [inspector, setInspector] = useState('parameters');
-  const [resourcesOpen, setResourcesOpen] = useState(true);
-  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>('overview');
+  const [activeSection, setActiveSection] = useState<NavigationSection>('project');
+  const [panels, setPanels] = useState<Record<WorkspaceView, Record<WorkspacePanel, boolean>>>({
+    overview: { resources: true, inspector: true }, detail: { resources: false, inspector: true },
+  });
+  const { resources: resourcesOpen, inspector: inspectorOpen } = panels[workspaceView];
+  const resourcesElement = useRef<HTMLElement>(null);
+  const inspectorElement = useRef<HTMLDivElement>(null);
+  const resourcesToggle = useRef<HTMLButtonElement>(null);
+  const inspectorToggle = useRef<HTMLButtonElement>(null);
+  const pendingFocusPanel = useRef<WorkspacePanel | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [projectName, setProjectName] = useState('Ellis 光传播研究');
   const [versionLabel, setVersionLabel] = useState('Ellis 模型版本');
@@ -55,8 +69,29 @@ export function Workbench({ client = desktopClient, dialogs = fileDialogs }: Pro
   const [previewDraft, setPreviewDraft] = useState(false);
   const [resourceQuery, setResourceQuery] = useState('');
   const [inputValid, setInputValid] = useState(true);
-  // 面板折叠只改变布局，保留未提交草稿、冻结运行和正在执行的任务。
-  const inspect = (tab: string) => { setInspector(tab); setInspectorOpen(true); };
+  // 每种构图分别保存面板选择；切换只调整显示，不卸载草稿和已冻结运行。
+  const setPanelOpen = (panel: WorkspacePanel, open: boolean) => setPanels((current) => ({
+    ...current, [workspaceView]: { ...current[workspaceView], [panel]: open },
+  }));
+  const changeWorkspaceView = (nextView: WorkspaceView) => {
+    // 在隐藏面板前记录键盘来源，避免浏览器先把焦点移回body而丢失恢复依据。
+    const focused = document.activeElement;
+    pendingFocusPanel.current = !panels[nextView].resources && resourcesElement.current?.contains(focused) ? 'resources'
+      : !panels[nextView].inspector && inspectorElement.current?.contains(focused) ? 'inspector' : null;
+    setWorkspaceView(nextView);
+  };
+  const inspect = (tab: string) => {
+    setInspector(tab);
+    if (tab === 'source') return;
+    changeWorkspaceView(tab === 'validation' ? 'detail' : 'overview');
+    setActiveSection(tab === 'validation' ? 'validation' : tab === 'environment' ? 'environment' : 'model');
+  };
+  useEffect(() => {
+    // 等待子级Tabs自身的焦点effect完成；仅恢复已隐藏来源，不抢走可见导航焦点。
+    if (pendingFocusPanel.current === 'resources') resourcesToggle.current?.focus();
+    if (pendingFocusPanel.current === 'inspector') inspectorToggle.current?.focus();
+    pendingFocusPanel.current = null;
+  }, [workspaceView, resourcesOpen, inspectorOpen]);
   const available = client.available();
   const result = previewDraft ? null : selectedRun?.result ?? null;
   const config = result?.config ?? (configSchema.safeParse(state.draft).success ? state.draft : null);
@@ -102,31 +137,44 @@ export function Workbench({ client = desktopClient, dialogs = fileDialogs }: Pro
     { name: '导出运行 JSON 记录', disabled: !selectedRun || busy, action: () => void workspace.exportRun() },
   ];
   const navigation = [
-    { label: '项目', icon: <FolderOutlined />, action: () => setCreateOpen(true), disabled: !available },
-    { label: '模型', icon: <FunctionOutlined />, action: () => inspect('parameters'), disabled: false },
+    { label: '项目', section: 'project', icon: <FolderOutlined />, action: () => { changeWorkspaceView('overview'); setActiveSection('project'); setCreateOpen(true); }, disabled: !available },
+    { label: '模型', section: 'model', icon: <FunctionOutlined />, action: () => inspect('parameters'), disabled: false },
     { label: '数据', icon: <DatabaseOutlined />, action: () => setDataOpen(true), disabled: !result },
     { label: '工作流（尚未接入）', short: '工作流', icon: <ApartmentOutlined />, disabled: true },
     { label: '运行', icon: <PlayCircleOutlined />, action: () => setRunsOpen(true), disabled: !state.project },
-    { label: '验证', icon: <CheckCircleOutlined />, action: () => inspect('validation'), disabled: false },
+    { label: '验证', section: 'validation', icon: <CheckCircleOutlined />, action: () => inspect('validation'), disabled: false },
     { label: '比较（尚未接入）', short: '比较', icon: <SwapOutlined />, disabled: true },
-    { label: '环境', icon: <ApiOutlined />, action: () => inspect('environment'), disabled: false },
+    { label: '环境', section: 'environment', icon: <ApiOutlined />, action: () => inspect('environment'), disabled: false },
     { label: '交付：导出运行记录', short: '交付', icon: <ExportOutlined />, action: () => void workspace.exportRun(), disabled: !selectedRun || busy },
   ];
+  // 使用稳定键重新排列分析区，切换构图不会重建图表、丢失缩放或暂停展示。
+  const timeline = <div className="timeline" aria-label="展示时间轴" key="timeline">
+    <Tooltip title="回到起点"><Button aria-label="回到轨迹起点" type="text" icon={<StepBackwardOutlined />} disabled={!result} onClick={() => seek(0)} /></Tooltip>
+    <Tooltip title={playing ? '暂停展示' : '播放展示'}><Button aria-label={playing ? '暂停展示' : '播放展示'} type="primary" icon={playing ? <PauseOutlined /> : <PlayCircleOutlined />} disabled={!result} onClick={play} /></Tooltip>
+    <Tooltip title="前进一个采样间隔"><Button aria-label="前进一个采样间隔" type="text" icon={<StepForwardOutlined />} disabled={!trajectory} onClick={() => seek(affine + bounds[1] / Math.max(1, (trajectory?.samples.length ?? 2) - 1))} /></Tooltip>
+    <span className="timeline-label">展示 λ <b>{affine.toFixed(3)}</b> / {bounds[1].toFixed(3)}</span>
+    <Slider aria-label="展示仿射参数" min={0} max={bounds[1] || 1} step={Math.max(bounds[1] / 10000, Number.EPSILON)} value={affine} disabled={!result} onChange={seek} tooltip={{ formatter: (value) => `λ = ${value?.toFixed(5)}` }} />
+    <Select aria-label="展示速度" value={rate} onChange={setRate} options={[0.5, 1, 2, 4].map((value) => ({ value, label: `${value}×` }))} />
+  </div>;
+  const raySelector = result && <div className="ray-selector" key="ray-selector"><span>光线选择</span>{result.trajectories.map((ray, index) => <Button key={index} size="small" type={selectedRay === index ? 'primary' : 'text'} onClick={() => setSelectedRay(index)}><i style={{ background: rayColor(ray.impactParameter) }} />b = {ray.impactParameter}</Button>)}
+    <Button size="small" icon={<DatabaseOutlined />} onClick={() => setDataOpen(true)}>原始样本</Button></div>;
+  const analysis = <Suspense key="analysis" fallback={<Alert type="info" title="正在加载分析图组件。" />}><AnalysisChart result={result} selected={selectedRay} affine={affine} mode={chartMode} layout={workspaceView} onMode={setChartMode} onSelect={setSelectedRay} onSeek={seek} /></Suspense>;
   return <ConfigProvider theme={WORKBENCH_THEME} locale={zhCN}>
     <div className="workbench" style={DESIGN_CSS_VARIABLES}>
-      <header className="topbar">
-        <div className="brand"><GravityMark /><strong>引力科研工作台</strong></div>
-        <span className="workspace-name">{state.project?.project.name ?? '本地研究工作区'}</span>
+      <header className="topbar" data-tauri-drag-region="deep">
+        <div className="brand" data-tauri-drag-region="deep"><GravityMark /><strong>引力科研工作台</strong></div>
+        <span className="workspace-name" data-tauri-drag-region="deep">{state.project?.project.name ?? '本地研究工作区'}</span>
         <Button className="command-trigger" icon={<SearchOutlined />} onClick={() => setCommandOpen(true)}><span>搜索或执行命令</span><kbd>Ctrl K</kbd></Button>
         <span className="host-status"><span className={`live-dot ${available ? '' : 'muted'}`} />{available ? '本地桌面' : '浏览器预览'}</span>
         <SemanticTag>开发中 · 0.1.0</SemanticTag>
+        <WindowControls />
       </header>
-      <div className={`workspace-body${resourcesOpen ? '' : ' resources-collapsed'}${inspectorOpen ? '' : ' inspector-collapsed'}`}>
+      <div data-workspace-view={workspaceView} className={`workspace-body${resourcesOpen ? '' : ' resources-collapsed'}${inspectorOpen ? '' : ' inspector-collapsed'}`}>
         <nav className="primary-nav" aria-label="主导航">
-          {navigation.map((entry) => <Tooltip placement="right" title={entry.label} key={entry.label}><div className="nav-entry"><Button aria-label={entry.label} type="text" icon={entry.icon} disabled={entry.disabled} onClick={entry.action} /><span>{entry.short ?? entry.label}</span></div></Tooltip>)}
+          {navigation.map((entry) => <Tooltip placement="right" title={entry.label} key={entry.label}><div className={`nav-entry${entry.section === activeSection ? ' is-active' : ''}`}><Button aria-label={entry.label} aria-current={entry.section === activeSection ? 'page' : undefined} type="text" icon={entry.icon} disabled={entry.disabled} onClick={entry.action} /><span>{entry.short ?? entry.label}</span></div></Tooltip>)}
           <div className="nav-bottom"><Tooltip title="核心功能开源永久免费"><span>GPL<br />3.0+</span></Tooltip></div>
         </nav>
-        <aside className="resource-panel" aria-label="项目资源" id="project-resources" hidden={!resourcesOpen}>
+        <aside ref={resourcesElement} className="resource-panel" aria-label="项目资源" id="project-resources" hidden={!resourcesOpen}>
           <div className="panel-heading"><strong>项目资源</strong><Tooltip title="创建项目"><Button aria-label="创建项目" type="text" icon={<PlusOutlined />} disabled={!available || busy} onClick={() => setCreateOpen(true)} /></Tooltip></div>
           <div className="resource-actions"><Button icon={<FolderOpenOutlined />} disabled={!available || busy} onClick={() => void workspace.openProject()}>打开项目</Button>
             <Tooltip title="刷新项目运行"><Button aria-label="刷新项目运行" icon={<ReloadOutlined />} disabled={!state.project || busy} onClick={() => void workspace.refresh()} /></Tooltip></div>
@@ -146,30 +194,22 @@ export function Workbench({ client = desktopClient, dialogs = fileDialogs }: Pro
           {workspace.error && <Alert type="error" showIcon title={workspace.error} closable onClose={workspace.clearError} role="alert" />}
           {workspace.notice && <Alert type="success" showIcon title={workspace.notice} className="operation-notice" />}
           <div className="context-bar"><div><Tooltip title={resourcesOpen ? '收起项目资源' : '展开项目资源'}>
-            <Button type="text" size="small" aria-label={resourcesOpen ? '收起项目资源' : '展开项目资源'} aria-expanded={resourcesOpen} aria-controls="project-resources" icon={resourcesOpen ? <MenuFoldOutlined /> : <MenuUnfoldOutlined />} onClick={() => setResourcesOpen(!resourcesOpen)} />
+            <Button ref={resourcesToggle} type="text" size="small" aria-label={resourcesOpen ? '收起项目资源' : '展开项目资源'} aria-expanded={resourcesOpen} aria-controls="project-resources" icon={resourcesOpen ? <MenuFoldOutlined /> : <MenuUnfoldOutlined />} onClick={() => setPanelOpen('resources', !resourcesOpen)} />
           </Tooltip><SemanticTag tone="info">Ellis</SemanticTag><span>{result ? '运行冻结配置' : '当前模型草稿'}</span>{dirty && <SemanticTag tone="warning">草稿未保存</SemanticTag>}</div>
             <Space size={8} className="context-actions">{selectedRun?.result && <Button size="small" onClick={() => setPreviewDraft(!previewDraft)}>{previewDraft ? '查看运行结果' : '预览草稿几何'}</Button>}
-              <Tooltip title={inspectorOpen ? '收起检查器' : '展开检查器'}><Button type="text" size="small" aria-label={inspectorOpen ? '收起检查器' : '展开检查器'} aria-expanded={inspectorOpen} aria-controls="context-inspector" icon={<LayoutOutlined />} onClick={() => setInspectorOpen(!inspectorOpen)} /></Tooltip>
+              <Tooltip title={inspectorOpen ? '收起检查器' : '展开检查器'}><Button ref={inspectorToggle} type="text" size="small" aria-label={inspectorOpen ? '收起检查器' : '展开检查器'} aria-expanded={inspectorOpen} aria-controls="context-inspector" icon={<LayoutOutlined />} onClick={() => setPanelOpen('inspector', !inspectorOpen)} /></Tooltip>
             </Space></div>
           <Suspense fallback={<Alert type="info" title="正在加载三维可视化组件。" />}><ResearchScene config={config} result={result} selected={selectedRay} affine={affine} onSelect={setSelectedRay} /></Suspense>
-          <div className="timeline" aria-label="展示时间轴">
-            <Tooltip title="回到起点"><Button aria-label="回到轨迹起点" type="text" icon={<StepBackwardOutlined />} disabled={!result} onClick={() => seek(0)} /></Tooltip>
-            <Tooltip title={playing ? '暂停展示' : '播放展示'}><Button aria-label={playing ? '暂停展示' : '播放展示'} type="primary" icon={playing ? <PauseOutlined /> : <PlayCircleOutlined />} disabled={!result} onClick={play} /></Tooltip>
-            <Tooltip title="前进一个采样间隔"><Button aria-label="前进一个采样间隔" type="text" icon={<StepForwardOutlined />} disabled={!trajectory} onClick={() => seek(affine + bounds[1] / Math.max(1, (trajectory?.samples.length ?? 2) - 1))} /></Tooltip>
-            <span className="timeline-label">展示 λ <b>{affine.toFixed(3)}</b> / {bounds[1].toFixed(3)}</span>
-            <Slider aria-label="展示仿射参数" min={0} max={bounds[1] || 1} step={Math.max(bounds[1] / 10000, Number.EPSILON)} value={affine} disabled={!result} onChange={seek} tooltip={{ formatter: (value) => `λ = ${value?.toFixed(5)}` }} />
-            <Select aria-label="展示速度" value={rate} onChange={setRate} options={[0.5, 1, 2, 4].map((value) => ({ value, label: `${value}×` }))} />
-          </div>
-          {result && <div className="ray-selector"><span>光线选择</span>{result.trajectories.map((ray, index) => <Button key={index} size="small" type={selectedRay === index ? 'primary' : 'text'} onClick={() => setSelectedRay(index)}><i style={{ background: rayColor(ray.impactParameter) }} />b = {ray.impactParameter}</Button>)}
-            <Button size="small" icon={<DatabaseOutlined />} onClick={() => setDataOpen(true)}>原始样本</Button></div>}
-          <Suspense fallback={<Alert type="info" title="正在加载分析图组件。" />}><AnalysisChart result={result} selected={selectedRay} affine={affine} mode={chartMode} layout={inspector === 'validation' ? 'detail' : 'overview'} onMode={setChartMode} onSelect={setSelectedRay} onSeek={seek} /></Suspense>
+          {workspaceView === 'detail' ? [raySelector, analysis, timeline] : [timeline, raySelector, analysis]}
         </main>
-        <div className="inspector-stack" hidden={!inspectorOpen}>
-        <RecentResearch runs={state.project?.runs ?? []} onSelect={selectRun} onViewAll={() => setRunsOpen(true)} />
+        <div ref={inspectorElement} className="inspector-stack" hidden={!inspectorOpen}>
+        {workspaceView === 'overview' && <RecentResearch runs={state.project?.runs ?? []} onSelect={selectRun} onViewAll={() => setRunsOpen(true)} />}
         <aside className="inspector-panel" aria-label="上下文检查器" id="context-inspector">
           <div className="panel-heading"><strong>选中对象</strong><SemanticTag tone={dirty ? 'warning' : 'info'}>{dirty ? '草稿' : '已保存'}</SemanticTag></div>
-          <Tabs activeKey={inspector} onChange={setInspector} size="small" items={[
+          <SelectedRaySummary run={selectedRun} trajectory={trajectory} previewDraft={previewDraft} />
+          <Tabs activeKey={inspector} onChange={inspect} size="small" items={[
             { key: 'parameters', label: '参数', children: <>
+              <Typography.Title level={5}>当前模型草稿</Typography.Title>
               <ConfigEditor config={state.draft} disabled={busy} onValidityChange={setInputValid} onChange={(patch) => workspace.dispatch({ type: 'draftChanged', patch })} />
               <Input aria-label="模型版本名称" placeholder="模型版本名称" value={versionLabel} onChange={(event) => setVersionLabel(event.target.value)} disabled={busy} />
               <Space className="inspector-actions"><Button icon={<SaveOutlined />} disabled={!state.project || busy || !inputValid} onClick={() => void workspace.saveModel(versionLabel)}>保存版本</Button><Button icon={<ReloadOutlined />} disabled={!selectedModel || busy} onClick={() => selectedModel && workspace.dispatch({ type: 'modelSelected', id: selectedModel.id })}>还原草稿</Button></Space>

@@ -3,7 +3,7 @@
 .panel-heading { height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 16px; border-bottom: 1px solid var(--color-border); flex-shrink: 0; }
 .panel-heading strong { font-size: 14px; }
 .subtle { font-size: 12px; color: var(--color-muted); margin-left: 16px; }
-.resource-panel { display: flex; flex-direction: column; overflow-y: auto; }
+.resource-panel { display: flex; flex-direction: column; min-width: 0; overflow-y: auto; }
 .resource-panel > .ant-input-affix-wrapper { width: auto; margin: 0 8px 16px; }
 .resource-actions { display: flex; padding: 8px; gap: 8px; }
 .resource-actions .ant-btn:first-child { flex: 1; }
@@ -58,6 +58,12 @@
 .recent-item-content > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .recent-state { display: flex; gap: 8px; flex-wrap: wrap; color: var(--color-muted); }
 .inspector-panel { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.selected-ray-summary { flex-shrink: 0; padding: 8px 16px; border-bottom: 1px solid var(--color-border); }
+.selected-ray-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.selected-ray-heading > span:first-child { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.selected-ray-heading i { width: 8px; height: 8px; border-radius: 50%; }
+.inspector-panel .selected-ray-summary .ant-descriptions { margin: 8px 0 0; }
+.inspector-panel .selected-ray-summary .ant-descriptions-item-label { min-width: 0; }
 .inspector-panel > .ant-tabs { flex: 1; min-height: 0; }
 .inspector-panel .ant-tabs-nav { margin: 0 16px 8px; }
 .inspector-panel .ant-tabs-content-holder { overflow: auto; padding: 0 16px 16px; }

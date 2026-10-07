@@ -1,7 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-local-workbench",
-  "description": "主窗口仅使用本地文件选择，不开放Shell、文件系统插件或远程页面能力。",
+  "description": "主窗口允许本地文件选择和一体标题栏的原生窗口控制，不开放Shell、文件系统插件或远程页面能力。",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open"]
+  "permissions": [
+    "core:default", "dialog:allow-open",
+    "core:window:allow-minimize", "core:window:allow-toggle-maximize",
+    "core:window:allow-close", "core:window:allow-start-dragging"
+  ]
 }

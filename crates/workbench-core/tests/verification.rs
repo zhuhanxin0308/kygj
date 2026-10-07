@@ -199,3 +199,77 @@ fn idempotent_request_conflicts_and_host_shutdown_do_not_append_history() {
     assert_eq!(core.execute_verification(&project.project.id, request).unwrap_err().code, "host_stopping");
     assert_eq!(core.list_verification_records(&project.project.id, &run.id, 0, 20).unwrap().total, 1);
 }
+
+#[test]
+fn active_runs_invalid_requests_and_cross_run_history_never_append_verification() {
+    const PAGE_SIZE: usize = 20;
+    let (_dir, core, project, store, run) = setup();
+    let project_id = &project.project.id;
+    let rule = core.list_verification_rules(project_id, 0, PAGE_SIZE).unwrap().rules.remove(0);
+    let request = ExecuteVerification {run_id:run.id.clone(),rule_version_id:rule.id.clone(),client_request_id:"等待终态".into(),previous_record_id:None};
+    for state in [RunState::Queued, RunState::Running, RunState::Cancelling] {
+        if state != RunState::Queued { store.transition(&run.id, state, None, None).unwrap(); }
+        assert_eq!(core.execute_verification(project_id, request.clone()).unwrap_err().code, "verification_run_active");
+    }
+    store.transition(&run.id, RunState::Cancelled, None, None).unwrap();
+    for client in ["", "包含\0控制字节"] {
+        let mut invalid = request.clone(); invalid.client_request_id = client.into();
+        assert_eq!(core.execute_verification(project_id, invalid).unwrap_err().code, "invalid_verification_request");
+    }
+    assert_eq!(core.list_verification_records(project_id, &run.id, 0, PAGE_SIZE).unwrap().total, 0);
+    let first = core.execute_verification(project_id, request).unwrap();
+    let preflight = store.prepare(&run.model_version_id, run.environment.clone(), ExecutionLimits::default(), vec![]).unwrap();
+    let other = store.consume_preflight(&preflight.id, &run.environment).unwrap();
+    store.transition(&other.id, RunState::Failed, None, Some(workbench_core::CoreError::new("process_spawn_failed", "启动失败"))).unwrap();
+    let foreign_history = ExecuteVerification {run_id:other.id.clone(),rule_version_id:rule.id.clone(),client_request_id:"跨运行历史".into(),previous_record_id:Some(first.id.clone())};
+    assert_eq!(core.execute_verification(project_id, foreign_history).unwrap_err().code, "verification_history_conflict");
+    assert_eq!(core.list_verification_records(project_id, &other.id, 0, PAGE_SIZE).unwrap().total, 0);
+    // 同一运行的显式重检可关联旧记录，并在分页中保留两次独立事实。
+    let second = core.execute_verification(project_id, ExecuteVerification {run_id:run.id.clone(),rule_version_id:rule.id.clone(),client_request_id:"同运行重检".into(),previous_record_id:Some(first.id.clone())}).unwrap();
+    let page = core.list_verification_records(project_id, &run.id, 0, 1).unwrap();
+    assert_eq!(page.records, vec![first]); assert_eq!(page.total, 2); assert_eq!(page.next_offset, Some(1));
+    let final_page = core.list_verification_records(project_id, &run.id, 1, 1).unwrap();
+    assert_eq!(final_page.records, vec![second.clone()]); assert_eq!(final_page.next_offset, None);
+    assert_eq!(core.get_verification_record(project_id, &second.id).unwrap(), second);
+}
+
+#[test]
+fn tampered_verification_record_or_request_is_rejected_on_all_history_reads() {
+    const PAGE_SIZE: usize = 20;
+    for target in ["record", "request"] {
+        let (_dir, core, project, store, run) = setup(); complete(&store, &run, 0.0);
+        let project_id = &project.project.id;
+        let rule = core.list_verification_rules(project_id, 0, PAGE_SIZE).unwrap().rules.remove(0);
+        let request = ExecuteVerification {run_id:run.id.clone(),rule_version_id:rule.id.clone(),client_request_id:"验证账本篡改".into(),previous_record_id:None};
+        let record = core.execute_verification(project_id, request.clone()).unwrap();
+        let db = rusqlite::Connection::open(store.directory().join(".gravity/workbench.sqlite")).unwrap();
+        // 模拟磁盘被外部工具篡改，正常接口仍由不可变触发器保护。
+        if target == "record" {
+            db.execute_batch("DROP TRIGGER verification_records_immutable_update").unwrap();
+            db.execute("UPDATE verification_records SET record_json=json_set(record_json,'$.checks[0].actual',0.5) WHERE id=?1", [&record.id]).unwrap();
+        } else {
+            db.execute_batch("DROP TRIGGER verification_requests_immutable_update").unwrap();
+            db.execute("UPDATE verification_requests SET record_json=json_set(record_json,'$.request.clientRequestId','外部替换') WHERE id=?1", [&record.request_id]).unwrap();
+        }
+        assert_eq!(core.get_verification_record(project_id, &record.id).unwrap_err().code, "corrupt_verification");
+        assert_eq!(core.list_verification_records(project_id, &run.id, 0, PAGE_SIZE).unwrap_err().code, "corrupt_verification");
+        assert_eq!(core.get_run_verification_state(project_id, &run.id, &rule.id).unwrap_err().code, "corrupt_verification");
+        assert_eq!(core.execute_verification(project_id, request).unwrap_err().code, "corrupt_verification");
+        assert_eq!(db.query_row("SELECT count(*) FROM verification_records", [], |row|row.get::<_,i64>(0)).unwrap(), 1);
+    }
+}
+
+#[test]
+fn pending_idempotent_request_does_not_execute_again_before_recovery() {
+    let (_dir, core, project, store, run) = setup(); complete(&store, &run, 0.0);
+    let rule = core.list_verification_rules(&project.project.id, 0, 20).unwrap().rules.remove(0);
+    let request = ExecuteVerification {run_id:run.id.clone(),rule_version_id:rule.id,client_request_id:"待确认的请求".into(),previous_record_id:None};
+    let record = core.execute_verification(&project.project.id, request.clone()).unwrap();
+    let db = rusqlite::Connection::open(store.directory().join(".gravity/workbench.sqlite")).unwrap();
+    // 精确表示请求已提交、完成行尚未提交的中断窗口。
+    db.execute_batch("DROP TRIGGER verification_records_immutable_delete").unwrap();
+    db.execute("DELETE FROM verification_records WHERE id=?1", [&record.id]).unwrap();
+    assert_eq!(core.execute_verification(&project.project.id, request).unwrap_err().code, "verification_pending");
+    assert_eq!(db.query_row("SELECT count(*) FROM verification_requests", [], |row|row.get::<_,i64>(0)).unwrap(), 1);
+    assert_eq!(db.query_row("SELECT count(*) FROM verification_records", [], |row|row.get::<_,i64>(0)).unwrap(), 0);
+}

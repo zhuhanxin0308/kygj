@@ -17,6 +17,7 @@
       "height": 960,
       "minWidth": 1024,
       "minHeight": 720,
+      "decorations": false,
       "backgroundColor": "#090E17",
       "theme": "Dark"
     }],
