@@ -92,27 +92,37 @@ impl ProjectStore {
     }
 
     pub fn state(&self) -> CoreResult<ProjectState> {
-        let connection = self.connection()?;
         let project = self.summary()?;
-        let mut models = connection.prepare("SELECT id,record_json FROM models ORDER BY rowid DESC").map_err(|_| schema::database_error())?;
-        let model_json = models.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).map_err(|_| schema::database_error())?;
-        let model_records = model_json.map(|row| {
-            let (id, json) = row.map_err(|_| schema::database_error())?;
-            let model: ModelVersion = decode(&json)?;
-            if model.id != id { return Err(corrupt()); }
-            Ok(model)
-        }).collect::<CoreResult<Vec<ModelVersion>>>()?;
-        let mut runs = connection.prepare("SELECT id,record_json FROM runs ORDER BY rowid DESC").map_err(|_| schema::database_error())?;
-        let run_json = runs.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).map_err(|_| schema::database_error())?;
-        let run_records = run_json.map(|row| {
-            let (id, json) = row.map_err(|_| schema::database_error())?;
-            let run: RunRecord = decode(&json)?;
-            if run.id != id { return Err(corrupt()); }
-            Ok(run)
-        }).collect::<CoreResult<Vec<RunRecord>>>()?;
-        for model in &model_records { validate_model_record(&connection, model, &project.id)?; }
-        for run in &run_records { validate_run_record(&connection, run, &project.id)?; }
-        Ok(ProjectState { project, models: model_records, runs: run_records })
+        self.read_snapshot(|connection| {
+            let mut models = connection.prepare("SELECT id,record_json FROM models ORDER BY rowid DESC").map_err(|_| schema::database_error())?;
+            let model_json = models.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).map_err(|_| schema::database_error())?;
+            let model_records = model_json.map(|row| {
+                let (id, json) = row.map_err(|_| schema::database_error())?;
+                let model: ModelVersion = decode(&json)?;
+                if model.id != id { return Err(corrupt()); }
+                Ok(model)
+            }).collect::<CoreResult<Vec<ModelVersion>>>()?;
+            let mut runs = connection.prepare("SELECT id,record_json FROM runs ORDER BY rowid DESC").map_err(|_| schema::database_error())?;
+            let run_json = runs.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).map_err(|_| schema::database_error())?;
+            let run_records = run_json.map(|row| {
+                let (id, json) = row.map_err(|_| schema::database_error())?;
+                let run: RunRecord = decode(&json)?;
+                if run.id != id { return Err(corrupt()); }
+                Ok(run)
+            }).collect::<CoreResult<Vec<RunRecord>>>()?;
+            for model in &model_records { validate_model_record(connection, model, &project.id)?; }
+            for run in &run_records { validate_run_record(connection, run, &project.id)?; }
+            Ok(ProjectState { project, models: model_records, runs: run_records })
+        })
+    }
+
+    /// JSON、关系列和结果哈希必须属于同一读快照，避免后台合法状态提交被误判为篡改。
+    fn read_snapshot<T>(&self, read: impl FnOnce(&Connection) -> CoreResult<T>) -> CoreResult<T> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred).map_err(|_| schema::database_error())?;
+        let value = read(&transaction)?;
+        transaction.commit().map_err(|_| schema::database_error())?;
+        Ok(value)
     }
 
     pub fn save_model(&self, label: &str, config: EllisConfig) -> CoreResult<ModelVersion> {
@@ -187,11 +197,14 @@ impl ProjectStore {
     }
 
     pub fn run(&self, id: &str) -> CoreResult<RunRecord> {
-        let connection = self.connection()?;
-        let run: RunRecord = read_record(&connection, "SELECT record_json FROM runs WHERE id=?1", id)?;
-        if run.id != id { return Err(corrupt()); }
-        validate_run_record(&connection, &run, &self.summary()?.id)?;
-        Ok(run)
+        // 项目身份不可变；在运行读事务前获取，避免回滚日志模式下嵌套连接阻塞写者提交。
+        let project = self.summary()?;
+        self.read_snapshot(|connection| {
+            let run: RunRecord = read_record(connection, "SELECT record_json FROM runs WHERE id=?1", id)?;
+            if run.id != id { return Err(corrupt()); }
+            validate_run_record(connection, &run, &project.id)?;
+            Ok(run)
+        })
     }
 
     pub fn transition(&self, id: &str, next: RunState, result: Option<TraceResult>, error: Option<CoreError>) -> CoreResult<RunRecord> {
@@ -331,3 +344,7 @@ pub(crate) fn validate_run_record(connection: &Connection, run: &RunRecord, proj
     if version >= 2 { crate::verification_storage::source_identity(connection,run)?; }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "storage_tests.rs"]
+mod tests;

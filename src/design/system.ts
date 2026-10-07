@@ -1,5 +1,4 @@
 import type { CSSProperties } from 'react';
-import { theme, type ThemeConfig } from 'antd';
 
 // v3唯一视觉基准：outputs/界面设计稿-科技版/全局设计规范.json。
 // 科研数值、验证状态和嵌入几何仍来自真实数据，设计图的示例值不属于主题。
@@ -14,21 +13,6 @@ export const DESIGN_TYPE = {
   numeric: '"Cascadia Code", Consolas, monospace',
   equation: 'Cambria, "Times New Roman", serif',
 } as const;
-
-// Ant Design与自绘科学场景共享语义色；组件仍使用各自可访问性实现。
-export const WORKBENCH_THEME: ThemeConfig = {
-  algorithm: theme.darkAlgorithm,
-  token: {
-    colorPrimary: DESIGN_COLORS.primary, colorInfo: DESIGN_COLORS.primary,
-    colorSuccess: DESIGN_COLORS.success, colorWarning: DESIGN_COLORS.warning, colorError: DESIGN_COLORS.error,
-    colorBgBase: DESIGN_COLORS.background, colorBgContainer: DESIGN_COLORS.surface, colorBgElevated: DESIGN_COLORS.raised,
-    colorText: DESIGN_COLORS.text, colorTextSecondary: DESIGN_COLORS.muted, colorBorder: DESIGN_COLORS.border,
-    borderRadius: DESIGN_LAYOUT.radius, borderRadiusSM: DESIGN_LAYOUT.radius, borderRadiusLG: DESIGN_LAYOUT.radius,
-    fontFamily: DESIGN_TYPE.body, fontSize: 14, fontSizeSM: 12, controlHeight: 32,
-    motionDurationFast: `${DESIGN_MOTION.hover}ms`, motionDurationMid: `${DESIGN_MOTION.selection}ms`,
-    motionDurationSlow: `${DESIGN_MOTION.drawer}ms`,
-  },
-};
 
 export const DESIGN_CSS_VARIABLES = Object.fromEntries([
   ...Object.entries(DESIGN_COLORS).map(([name, value]) => [`--color-${name}`, value]),

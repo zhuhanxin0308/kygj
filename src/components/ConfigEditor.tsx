@@ -1,4 +1,5 @@
-import { Alert, Collapse, Form, Input, InputNumber, Typography } from 'antd';
+import { Collapse, Form, Input, InputNumber, Typography } from 'antd';
+import { DesignNotice as Alert } from './DesignNotice';
 import { useEffect, useState } from 'react';
 import { INPUT_LIMITS, parseImpactParameters, type EllisConfig } from '../domain/model';
 

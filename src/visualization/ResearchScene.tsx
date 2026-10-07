@@ -1,7 +1,8 @@
 import { Component, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { GizmoHelper, GizmoViewport, Line, OrbitControls } from '@react-three/drei';
-import { Alert, Button, Checkbox, Popover, Tooltip } from 'antd';
+import { Button, Checkbox, Popover, Tooltip } from 'antd';
+import { DesignNotice as Alert } from '../components/DesignNotice';
 import { AimOutlined, BorderOutlined, CompressOutlined, DragOutlined, EyeOutlined, MinusOutlined, PlusOutlined, ReloadOutlined, RotateRightOutlined, ScissorOutlined } from '@ant-design/icons';
 import { BufferAttribute, BufferGeometry, DoubleSide, MOUSE, Vector3 } from 'three';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
@@ -131,7 +132,23 @@ export function ResearchScene(props: Props) {
   const [orthographic, setOrthographic] = useState(false);
   const controls = useRef<OrbitControlsImpl | null>(null);
   const wrapper = useRef<HTMLDivElement>(null);
+  const layerContent = useRef<HTMLDivElement>(null);
+  const layerFocusOrigin = useRef<HTMLElement | null>(null);
+  const keyboardLayerOpen = useRef(false);
   const cancelReset = useRef<(() => void) | null>(null);
+  // 图层弹层通过portal挂载；键盘焦点必须显式进入弹层，并在关闭时回到原控件。
+  const focusLayer = () => {
+    if (keyboardLayerOpen.current) layerContent.current?.querySelector<HTMLInputElement>('input[type="checkbox"]')?.focus();
+  };
+  const closeLayers = () => {
+    setLayersOpen(false); keyboardLayerOpen.current = false;
+    if (layerFocusOrigin.current?.isConnected) layerFocusOrigin.current.focus();
+  };
+  useEffect(() => {
+    if (!layersOpen) return;
+    const frame = requestAnimationFrame(focusLayer);
+    return () => cancelAnimationFrame(frame);
+  }, [layersOpen]);
   useEffect(() => () => cancelReset.current?.(), [orthographic]);
   // 按钮和键盘沿用滚轮当前状态，不再维护与真实相机脱节的第二套倍率。
   const zoomBy = (factor: number) => { cancelReset.current?.(); controls.current?.dollyOut(factor); };
@@ -151,8 +168,11 @@ export function ResearchScene(props: Props) {
         <Tooltip title="缩小（−）"><Button aria-label="缩小视图" type="text" icon={<MinusOutlined />} onClick={() => zoomBy(1 / CAMERA.zoomStep)} /></Tooltip>
         <Tooltip title={orthographic ? '切换透视投影' : '切换正交投影'}><Button aria-label="切换投影" type={orthographic ? 'primary' : 'text'} icon={<BorderOutlined />} onClick={() => setOrthographic(!orthographic)} /></Tooltip>
         <Tooltip title="曲面剖切"><Button aria-label="曲面剖切" aria-pressed={cut} type={cut ? 'primary' : 'text'} icon={<ScissorOutlined />} onClick={() => setCut(!cut)} /></Tooltip>
-        <Popover title="场景图层" trigger="click" open={layersOpen} onOpenChange={setLayersOpen} content={<div className="scene-layer-list">
-          <Checkbox checked={surface} onChange={(event) => setSurface(event.target.checked)}>嵌入曲面</Checkbox>
+        <Popover title="场景图层" trigger="click" open={layersOpen} afterOpenChange={(open) => { if (open) focusLayer(); }}
+          onOpenChange={(open) => { if (open) layerFocusOrigin.current = document.activeElement as HTMLElement; setLayersOpen(open); }}
+          content={<div className="scene-layer-list" ref={layerContent} onFocusCapture={() => { keyboardLayerOpen.current = false; }}
+            onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeLayers(); } }}>
+          <Checkbox autoFocus={keyboardLayerOpen.current} checked={surface} onChange={(event) => setSurface(event.target.checked)}>嵌入曲面</Checkbox>
           <Checkbox checked={grid} onChange={(event) => setGrid(event.target.checked)}>参考网格</Checkbox>
           <Checkbox checked={axes} onChange={(event) => setAxes(event.target.checked)}>坐标轴</Checkbox>
           <span className="scene-layer-section">光线路径 · 仅控制显示</span>
@@ -173,8 +193,12 @@ export function ResearchScene(props: Props) {
         if (event.key === '+' || event.key === '=') zoomBy(CAMERA.zoomStep);
         if (event.key === '-') zoomBy(1 / CAMERA.zoomStep);
         if (event.key.toLowerCase() === 'r') resetCamera();
-        if (event.key.toLowerCase() === 'l') { event.preventDefault(); setLayersOpen((open) => !open); }
-        if (event.key === 'Escape') setLayersOpen(false);
+        if (event.key.toLowerCase() === 'l') {
+          event.preventDefault();
+          if (layersOpen) closeLayers();
+          else { layerFocusOrigin.current = event.currentTarget; keyboardLayerOpen.current = true; setLayersOpen(true); }
+        }
+        if (event.key === 'Escape') closeLayers();
       }}>
       {props.config ? <SceneBoundary><Canvas key={String(orthographic)} orthographic={orthographic} frameloop="demand" dpr={[1, 2]}
         camera={{ fov: CAMERA.fieldOfView, near: CAMERA.near, far: CAMERA.far, zoom: 1 }}>

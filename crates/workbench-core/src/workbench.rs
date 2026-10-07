@@ -85,6 +85,8 @@ impl Workbench {
     pub fn get_project(&self, project_id: &str) -> CoreResult<ProjectState> { self.project(project_id)?.state() }
 
     pub fn save_model(&self, project_id: &str, label: &str, config: EllisConfig) -> CoreResult<ModelVersion> {
+        // 与关闭决定共用门禁，不能在停止接受写入后追加模型版本。
+        let _operation = lock(&self.inner.operation)?;
         self.ensure_running()?;
         self.project(project_id)?.save_model(label, config)
     }

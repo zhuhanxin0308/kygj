@@ -106,3 +106,62 @@ fn real_output_overflow_persists_failed_run_and_exportable_error() {
     assert_eq!(exported.sha256, workbench_core::storage::sha256_bytes(&bytes));
     workbench.shutdown().unwrap();
 }
+
+#[test]
+fn real_nonradial_and_critical_results_reassess_saved_evidence_without_inventing_quadrature() {
+    const PAGE_SIZE: usize = 20;
+    const AFFINE_BUDGET: f64 = 40.0;
+    const RELATIVE_TOLERANCE: f64 = 1e-11;
+    const ABSOLUTE_TOLERANCE: f64 = 1e-13;
+    let directory = tempfile::tempdir().unwrap();
+    let workbench = Workbench::new();
+    let project = workbench.create_project(directory.path(), "真实非径向与临界复评").unwrap().project;
+    let mut input = config();
+    // 同时覆盖两种旋转方向的穿喉、临界渐近和返回支，全部样本来自实际已安装引擎。
+    input.impact_parameters = vec![0.5, -0.5, 1.0, -1.0, 2.0, -2.0];
+    input.max_affine_parameter = AFFINE_BUDGET;
+    input.relative_tolerance = RELATIVE_TOLERANCE;
+    input.absolute_tolerance = ABSOLUTE_TOLERANCE;
+    let model = workbench.save_model(&project.id, "六支光线", input).unwrap();
+    let report = workbench.prepare_run(&project.id, &model.id, &python()).unwrap();
+    let run = workbench.start_run(&project.id, &report.id).unwrap();
+    let complete = await_terminal(&workbench, &project.id, &run.id);
+    assert_eq!(complete.state, RunState::Completed, "{:?}", complete.error);
+    let rule = workbench.list_verification_rules(&project.id, 0, PAGE_SIZE).unwrap().rules.remove(0);
+    let verified = workbench.execute_verification(&project.id, ExecuteVerification {
+        run_id:run.id.clone(), rule_version_id:rule.id.clone(), client_request_id:"真实六支复评".into(), previous_record_id:None,
+    }).unwrap();
+    assert_eq!(verified.conclusion, VerificationConclusion::Inconclusive);
+    let trajectories = &complete.result.as_ref().unwrap().trajectories;
+    for (index, trajectory) in trajectories.iter().enumerate() {
+        let check = |metric| verified.checks.iter().find(|item| item.trajectory_index == Some(index) && item.metric_id == metric).unwrap();
+        let quadrature = check(VerificationMetric::ReferenceQuadratureError);
+        assert_eq!(quadrature.conclusion, VerificationConclusion::Inconclusive);
+        assert_eq!(quadrature.reason_code, "quadrature_evidence_missing");
+        assert!(quadrature.actual.is_none());
+        for metric in [VerificationMetric::EnergyError, VerificationMetric::AngularMomentumError,
+            VerificationMetric::NullError, VerificationMetric::EquatorialError] {
+            assert_eq!(check(metric).conclusion, VerificationConclusion::Passed, "b={}，指标={metric:?}", trajectory.impact_parameter);
+        }
+        if trajectory.impact_parameter.abs() == model.config.throat_radius {
+            assert_eq!(trajectory.termination, "budget_exhausted");
+            assert_eq!(check(VerificationMetric::PropagationCompletion).conclusion, VerificationConclusion::NotApplicable);
+            for metric in [VerificationMetric::CriticalRelationError, VerificationMetric::CriticalDirectionError, VerificationMetric::CriticalPositionError] {
+                assert_eq!(check(metric).conclusion, VerificationConclusion::Passed);
+            }
+        } else {
+            assert_eq!(check(VerificationMetric::PropagationCompletion).conclusion, VerificationConclusion::Passed);
+            assert_eq!(check(VerificationMetric::AzimuthReferenceError).conclusion, VerificationConclusion::Passed);
+            if trajectory.impact_parameter.abs() > model.config.throat_radius {
+                assert_eq!(trajectory.termination, "returned");
+                assert_eq!(check(VerificationMetric::TurningRadiusError).conclusion, VerificationConclusion::Passed);
+            } else { assert_eq!(trajectory.termination, "through"); }
+        }
+    }
+    // 详情、历史和汇总应读取同一不可变验证记录，复评不得修改原运行。
+    assert_eq!(workbench.get_verification_record(&project.id, &verified.id).unwrap(), verified);
+    assert_eq!(workbench.list_verification_records(&project.id, &run.id, 0, PAGE_SIZE).unwrap().records, vec![verified.clone()]);
+    assert_eq!(workbench.get_run_verification_state(&project.id, &run.id, &rule.id).unwrap().latest_record, Some(verified));
+    assert_eq!(workbench.get_run(&project.id, &run.id).unwrap(), complete);
+    workbench.shutdown().unwrap();
+}

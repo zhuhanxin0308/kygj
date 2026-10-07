@@ -1,4 +1,5 @@
-import { Alert, Descriptions, Empty, Table, Tag, Typography } from 'antd';
+import { Descriptions, Empty, Table, Typography } from 'antd';
+import { DesignNotice as Alert, SemanticTag } from './DesignNotice';
 import type { EnvironmentInfo, RunRecord, Trajectory } from '../domain/contracts';
 import { EVENT_LABELS, RUN_LABELS, VALIDATION_LABELS } from '../domain/session';
 
@@ -19,8 +20,8 @@ export function EnvironmentDetails({ environment }: { environment: EnvironmentIn
 export function RecordInspector({ run, trajectory, onSeek }: { run: RunRecord | null; trajectory: Trajectory | null; onSeek(affine: number): void }) {
   if (!run) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚无运行结果" />;
   return <div className="record-inspector">
-    <div className="status-tags"><Tag color={run.state === 'completed' ? 'cyan' : 'gold'}>{RUN_LABELS[run.state]}</Tag>
-      <Tag color={run.validationStatus === 'passed' ? 'green' : 'gold'}>{VALIDATION_LABELS[run.validationStatus]}</Tag><Tag>人工复核未记录</Tag></div>
+    <div className="status-tags"><SemanticTag tone={run.state === 'completed' ? 'info' : run.state === 'failed' ? 'error' : 'warning'}>{RUN_LABELS[run.state]}</SemanticTag>
+      <SemanticTag tone={run.validationStatus === 'passed' ? 'success' : run.validationStatus === 'failed' ? 'error' : 'warning'}>{VALIDATION_LABELS[run.validationStatus]}</SemanticTag><SemanticTag>人工复核未记录</SemanticTag></div>
     {run.error && <Alert type="error" showIcon title={run.error.message} description={run.error.code} />}
     <Descriptions column={1} size="small" items={[
       { key: 'run', label: '运行身份', children: <code className="break-all">{run.id}</code> },
@@ -34,7 +35,7 @@ export function RecordInspector({ run, trajectory, onSeek }: { run: RunRecord | 
       <Table size="small" pagination={false} rowKey="name" dataSource={trajectory.validation.checks} columns={[
         { title: '检查', dataIndex: 'name' },
         { title: '实际 / 门槛', key: 'actual', render: (_, check) => <span className="numeric">{numberText(check.actual)}<br /><small>≤ {numberText(check.threshold)}</small></span> },
-        { title: '状态', dataIndex: 'passed', render: (passed: boolean) => <Tag color={passed ? 'green' : 'red'}>{passed ? '通过' : '未通过'}</Tag> },
+        { title: '状态', dataIndex: 'passed', render: (passed: boolean) => <SemanticTag tone={passed ? 'success' : 'error'}>{passed ? '通过' : '未通过'}</SemanticTag> },
       ]} />
       <Typography.Title level={5}>事件定位</Typography.Title>
       {trajectory.events.length === 0 ? <Typography.Text type="secondary">本次轨迹尚无已确认事件。</Typography.Text> : <div className="event-list">
